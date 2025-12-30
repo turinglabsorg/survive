@@ -19,8 +19,8 @@ const IsometricGame = () => {
   const [enemies, setEnemies] = React.useState([]);
   const [bullets, setBullets] = React.useState([]);
 
-  // Fixed grid size - tile dimensions will scale to fit
-  const GRID_SIZE = 12;
+  // Random grid size between 24 and 50 - tile dimensions will scale to fit
+  const [GRID_SIZE] = React.useState(() => Math.floor(Math.random() * (20 - 10 + 1)) + 10);
 
   // Calculate tile dimensions dynamically to fit viewport
   const calculateTileDimensions = (canvasWidth, canvasHeight) => {
