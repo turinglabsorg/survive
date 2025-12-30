@@ -940,13 +940,13 @@ const IsometricGame = () => {
             zIndex: 100
           }
         },
-        // Game state title only on desktop
-        (getViewportSize().width < 768) && React.createElement(
+        // Game state title (shown on all viewports)
+        React.createElement(
           'div',
           {
             style: {
-              fontSize: '3rem',
-              marginTop: '60px',
+              fontSize: getViewportSize().width < 768 ? '2.4rem' : '3rem',
+              marginTop: getViewportSize().width < 768 ? '40px' : '60px',
               color: '#000000',
               textShadow: '0 0 10px rgba(0, 255, 0, 0.5)'
             }
