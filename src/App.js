@@ -551,6 +551,17 @@ const IsometricGame = () => {
             y: bullet.y + bullet.dy
           };
 
+          // Block bullets on walls
+          const tileX = Math.floor(newBullet.x);
+          const tileY = Math.floor(newBullet.y);
+          if (
+            tileX < 0 || tileX >= GRID_SIZE ||
+            tileY < 0 || tileY >= GRID_SIZE ||
+            gameMap?.[tileY]?.[tileX] === 1 // wall tile
+          ) {
+            return null;
+          }
+
           // Check if bullet hit ball
           const distance = Math.sqrt(
             Math.pow(newBullet.x - ballPos.x, 2) +
