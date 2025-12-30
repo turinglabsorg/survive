@@ -16,17 +16,63 @@ const DarkMusicGenerator = () => {
   const isPlayingRef = React.useRef(false);
   const intervalRef = React.useRef(null);
 
-  // Minor pentatonic scale notes (in MIDI note numbers, lower octaves for darkness)
-  // C minor pentatonic: C, Eb, F, G, Bb (repeated across octaves)
-  const pentatonicScale = [36, 39, 41, 43, 46, 48, 51, 53, 55, 58, 60, 63, 65, 67, 70]; // Multiple octaves of pentatonic
-  const darkScale = pentatonicScale; // Keep for backward compatibility
-  const darkChords = [
-    [36, 39, 43], // Cm
-    [39, 43, 46], // Ebm
-    [41, 44, 48], // Fm
-    [43, 46, 51], // Gm
-    [36, 43, 48]  // Cm (inversion)
-  ];
+  // Calculate chromatic root note based on survive_steps_done
+  // Each step shifts the root chromatically (0-11 semitones)
+  const getChromaticRoot = () => {
+    const saved = localStorage.getItem('survive_steps_done');
+    const stepsDone = saved ? parseInt(saved, 10) : 0;
+    // Get chromatic offset (0-11) from steps done
+    const chromaticOffset = stepsDone % 12;
+    // Base root is C (MIDI 36), add chromatic offset
+    return 36 + chromaticOffset;
+  };
+
+  // Build minor pentatonic scale relative to chromatic root
+  // Minor pentatonic intervals: 0, 3, 5, 7, 10 semitones from root
+  const buildPentatonicScale = (rootNote) => {
+    const intervals = [0, 3, 5, 7, 10]; // Minor pentatonic intervals
+    const scale = [];
+    // Build scale across multiple octaves (3 octaves)
+    for (let octave = 0; octave < 3; octave++) {
+      intervals.forEach(interval => {
+        scale.push(rootNote + (octave * 12) + interval);
+      });
+    }
+    return scale;
+  };
+
+  // Build chords relative to chromatic root
+  const buildChords = (rootNote) => {
+    // Minor pentatonic scale notes
+    const root = rootNote;
+    const minorThird = rootNote + 3;
+    const fourth = rootNote + 5;
+    const fifth = rootNote + 7;
+    const minorSeventh = rootNote + 10;
+    
+    return [
+      [root, minorThird, fifth],           // i (minor)
+      [minorThird, fifth, minorSeventh],  // iii (minor)
+      [fourth, minorSeventh, root + 12],   // iv (minor)
+      [fifth, root + 12, minorThird + 12], // v (minor)
+      [root, fifth, root + 12]              // i (inversion)
+    ];
+  };
+
+  // Functions to get current scale and chords (recalculate each time to reflect current steps_done)
+  const getDarkScale = () => {
+    const root = getChromaticRoot();
+    return buildPentatonicScale(root);
+  };
+
+  const getDarkChords = () => {
+    const root = getChromaticRoot();
+    return buildChords(root);
+  };
+
+  // For backward compatibility, provide scale and chords as functions
+  const darkScale = getDarkScale(); // Initial scale
+  const darkChords = getDarkChords(); // Initial chords
 
   // Upper harmonized notes (2 octaves higher for bright contrast)
   const getUpperHarmony = (baseNote) => {
@@ -137,8 +183,10 @@ const DarkMusicGenerator = () => {
   const playDarkChord = () => {
     if (!isPlayingRef.current || !audioContextRef.current) return;
 
+    // Get current chords (recalculate based on current steps_done)
+    const currentChords = getDarkChords();
     // Random chord from dark scale
-    const chord = darkChords[Math.floor(Math.random() * darkChords.length)];
+    const chord = currentChords[Math.floor(Math.random() * currentChords.length)];
     const baseDelay = Math.random() * 0.5;
     
     // Play chord notes with slight delays for atmosphere
@@ -156,8 +204,9 @@ const DarkMusicGenerator = () => {
       playNote(upperNote, upperDuration, upperDelay, upperVolume, true);
     });
 
-    // Add a random bass note (very low, very dark)
-    const bassNote = darkScale[0] - 12; // Octave lower
+      // Add a random bass note (very low, very dark)
+      const currentScale = getDarkScale();
+      const bassNote = currentScale[0] - 12; // Octave lower
     playNote(bassNote, 3 + Math.random() * 2, baseDelay, 0.15, false);
   };
 
@@ -165,9 +214,10 @@ const DarkMusicGenerator = () => {
     if (!isPlayingRef.current || !audioContextRef.current) return;
 
     // Random melody from dark scale
+    const currentScale = getDarkScale();
     const noteCount = 2 + Math.floor(Math.random() * 3);
     for (let i = 0; i < noteCount; i++) {
-      const note = darkScale[Math.floor(Math.random() * darkScale.length)];
+      const note = currentScale[Math.floor(Math.random() * currentScale.length)];
       const delay = i * (0.8 + Math.random() * 0.4);
       const duration = 1.5 + Math.random() * 1.5;
       const volume = 0.15 + Math.random() * 0.1;
@@ -280,7 +330,8 @@ const DarkMusicGenerator = () => {
     resumeAudioContext();
     
     // Very low, dark note (2 octaves below the lowest scale note)
-    const darkNote = darkScale[0] - 24; // Very deep bass
+    const currentScale = getDarkScale();
+    const darkNote = currentScale[0] - 24; // Very deep bass
     const duration = 4; // Long note
     const volume = 0.4; // Noticeable but not overwhelming
     
@@ -292,7 +343,8 @@ const DarkMusicGenerator = () => {
     resumeAudioContext();
     
     // High note (2 octaves above the highest scale note)
-    const highNote = darkScale[darkScale.length - 1] + 24; // Very high
+    const currentScale = getDarkScale();
+    const highNote = currentScale[currentScale.length - 1] + 24; // Very high
     const duration = 2; // Medium length
     const volume = 0.35; // Bright and clear
     
@@ -631,6 +683,14 @@ const IsometricGame = () => {
     localStorage.setItem('survive_steps_done', score.toString());
   }, [score]);
 
+  // Apply penalty when player loses or gets trapped (subtract 30 steps, minimum 0)
+  const applyPenalty = () => {
+    setScore(prev => {
+      const newScore = Math.max(0, prev - 30); // Subtract 30, but don't go below 0
+      return newScore;
+    });
+  };
+
   React.useEffect(() => {
     setGameMap(generateRandomMap());
   }, []);
@@ -929,6 +989,8 @@ const IsometricGame = () => {
       // Check for yellow trap tile
       if (gameMap[newY][newX] === 2) {
         setGameState('trapped');
+        // Apply penalty: subtract 30 steps
+        applyPenalty();
         // Play gong sound when player gets trapped
         musicGenerator.playGong();
       }
@@ -1104,6 +1166,8 @@ const IsometricGame = () => {
 
           if (distance < 0.5) {
             setGameState('shot');
+            // Apply penalty: subtract 30 steps
+            applyPenalty();
             // Play drum splash when player gets shot
             if (musicGeneratorRef.current && musicGeneratorRef.current.playDrumSplash) {
               musicGeneratorRef.current.playDrumSplash();
@@ -1570,7 +1634,7 @@ const IsometricGame = () => {
           border: '1px solid #00ff00'
         }
       },
-      `Steps Done: ${score}`
+      `Survivals: ${score}`
     ),
 
     // Game modal overlay
@@ -1652,7 +1716,7 @@ const IsometricGame = () => {
             },
             onClick: resetGame
           },
-          `Steps Done: ${score}`
+          `Survivals: ${score}`
         ),
         React.createElement(
           'div',
