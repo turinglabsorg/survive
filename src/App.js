@@ -83,12 +83,30 @@ const DarkMusicGenerator = () => {
     }
   };
 
+  // Helper function to safely resume audio context with error handling
+  const resumeAudioContext = () => {
+    if (!audioContextRef.current) {
+      initAudio();
+    }
+    
+    if (audioContextRef.current.state === 'suspended') {
+      // resume() returns a Promise - handle it properly
+      audioContextRef.current.resume().catch(err => {
+        console.warn('Failed to resume audio context:', err);
+        // Audio might be blocked by browser policy - this is expected in some cases
+      });
+    }
+  };
+
   const midiToFrequency = (midiNote) => {
     return 440 * Math.pow(2, (midiNote - 69) / 12);
   };
 
   const playNote = (midiNote, duration, delay = 0, volume = 0.3, useEffects = false) => {
     if (!audioContextRef.current) return;
+    
+    // Don't play if context is closed or in an error state
+    if (audioContextRef.current.state === 'closed') return;
 
     const oscillator = audioContextRef.current.createOscillator();
     const gainNode = audioContextRef.current.createGain();
@@ -168,12 +186,8 @@ const DarkMusicGenerator = () => {
     if (isPlayingRef.current) return;
     
     initAudio();
+    resumeAudioContext();
     isPlayingRef.current = true;
-
-    // Resume audio context if suspended (browser autoplay policy)
-    if (audioContextRef.current.state === 'suspended') {
-      audioContextRef.current.resume();
-    }
 
     // Play initial chord
     playDarkChord();
@@ -197,14 +211,7 @@ const DarkMusicGenerator = () => {
 
   // Play a step sound based on tile position (random but consistent per tile)
   const playStepSound = (tileX, tileY) => {
-    if (!audioContextRef.current) {
-      initAudio();
-    }
-    
-    // Resume audio context if suspended
-    if (audioContextRef.current.state === 'suspended') {
-      audioContextRef.current.resume();
-    }
+    resumeAudioContext();
     
     // Create a deterministic but random note based on tile position
     // This ensures each tile always plays the same note
@@ -265,13 +272,7 @@ const DarkMusicGenerator = () => {
 
   // Play lose sound - very dark and long note
   const playLoseSound = () => {
-    if (!audioContextRef.current) {
-      initAudio();
-    }
-    
-    if (audioContextRef.current.state === 'suspended') {
-      audioContextRef.current.resume();
-    }
+    resumeAudioContext();
     
     // Very low, dark note (2 octaves below the lowest scale note)
     const darkNote = darkScale[0] - 24; // Very deep bass
@@ -283,13 +284,7 @@ const DarkMusicGenerator = () => {
 
   // Play win sound - high note with reverb
   const playWinSound = () => {
-    if (!audioContextRef.current) {
-      initAudio();
-    }
-    
-    if (audioContextRef.current.state === 'suspended') {
-      audioContextRef.current.resume();
-    }
+    resumeAudioContext();
     
     // High note (2 octaves above the highest scale note)
     const highNote = darkScale[darkScale.length - 1] + 24; // Very high
@@ -302,13 +297,7 @@ const DarkMusicGenerator = () => {
 
   // Play drum kick sound for bullet shots
   const playDrumKick = () => {
-    if (!audioContextRef.current) {
-      initAudio();
-    }
-    
-    if (audioContextRef.current.state === 'suspended') {
-      audioContextRef.current.resume();
-    }
+    resumeAudioContext();
     
     const now = audioContextRef.current.currentTime;
     
@@ -338,13 +327,7 @@ const DarkMusicGenerator = () => {
 
   // Play drum splash sound when player gets shot
   const playDrumSplash = () => {
-    if (!audioContextRef.current) {
-      initAudio();
-    }
-    
-    if (audioContextRef.current.state === 'suspended') {
-      audioContextRef.current.resume();
-    }
+    resumeAudioContext();
     
     const now = audioContextRef.current.currentTime;
     
@@ -378,13 +361,7 @@ const DarkMusicGenerator = () => {
 
   // Play gong sound when player gets trapped
   const playGong = () => {
-    if (!audioContextRef.current) {
-      initAudio();
-    }
-    
-    if (audioContextRef.current.state === 'suspended') {
-      audioContextRef.current.resume();
-    }
+    resumeAudioContext();
     
     const now = audioContextRef.current.currentTime;
     
@@ -422,7 +399,17 @@ const DarkMusicGenerator = () => {
     });
   };
 
-  return { startMusic, stopMusic, playStepSound, playLoseSound, playWinSound, playDrumKick, playDrumSplash, playGong };
+  // Mute/unmute audio by setting gain to 0 or restoring volume
+  const setMuted = (muted) => {
+    if (!gainNodeRef.current) {
+      initAudio();
+    }
+    if (gainNodeRef.current) {
+      gainNodeRef.current.gain.value = muted ? 0 : 0.15;
+    }
+  };
+
+  return { startMusic, stopMusic, playStepSound, playLoseSound, playWinSound, playDrumKick, playDrumSplash, playGong, setMuted };
 };
 
 const IsometricGame = () => {
@@ -445,6 +432,11 @@ const IsometricGame = () => {
   const [joystickPos, setJoystickPos] = React.useState({ x: 0, y: 0 });
   const [isJoystickActive, setIsJoystickActive] = React.useState(false);
   const joystickDirectionRef = React.useRef({ x: 0, y: 0 });
+  const [soundEnabled, setSoundEnabled] = React.useState(() => {
+    // Load sound preference from localStorage, default to true
+    const saved = localStorage.getItem('survive_sound_enabled');
+    return saved !== null ? saved === 'true' : true;
+  });
   
   // Music generator
   const musicGenerator = DarkMusicGenerator();
@@ -454,6 +446,24 @@ const IsometricGame = () => {
   React.useEffect(() => {
     musicGeneratorRef.current = musicGenerator;
   }, [musicGenerator]);
+
+  // Toggle sound on/off
+  const toggleSound = () => {
+    const newState = !soundEnabled;
+    setSoundEnabled(newState);
+  };
+
+  // Save sound preference to localStorage whenever it changes
+  React.useEffect(() => {
+    localStorage.setItem('survive_sound_enabled', soundEnabled.toString());
+  }, [soundEnabled]);
+
+  // Apply sound state when it changes or when music generator is ready
+  React.useEffect(() => {
+    if (musicGenerator.setMuted) {
+      musicGenerator.setMuted(!soundEnabled);
+    }
+  }, [soundEnabled, musicGenerator]);
 
   // Random grid size between 24 and 50 - tile dimensions will scale to fit
   const [GRID_SIZE] = React.useState(() => Math.floor(Math.random() * (20 - 10 + 1)) + 10);
@@ -1298,6 +1308,76 @@ const IsometricGame = () => {
           overflow: 'hidden'
         }
       }
+    ),
+    // Sound toggle button
+    React.createElement(
+      'button',
+      {
+        onClick: toggleSound,
+        style: {
+          position: 'fixed',
+          top: getViewportSize().width < 768 ? '15px' : '20px',
+          right: getViewportSize().width < 768 ? '15px' : '20px',
+          width: getViewportSize().width < 768 ? '40px' : '48px',
+          height: getViewportSize().width < 768 ? '40px' : '48px',
+          backgroundColor: 'rgba(0, 0, 0, 0.7)',
+          border: '2px solid #00ff00',
+          borderRadius: '50%',
+          cursor: 'pointer',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 20,
+          padding: 0,
+          touchAction: 'manipulation',
+          userSelect: 'none',
+          WebkitUserSelect: 'none',
+          WebkitTapHighlightColor: 'transparent',
+          outline: 'none',
+          boxShadow: '0 0 10px rgba(0, 255, 0, 0.5)',
+          transition: 'all 0.2s ease'
+        },
+        onMouseEnter: (e) => {
+          e.target.style.boxShadow = '0 0 15px rgba(0, 255, 0, 0.8)';
+          e.target.style.transform = 'scale(1.1)';
+        },
+        onMouseLeave: (e) => {
+          e.target.style.boxShadow = '0 0 10px rgba(0, 255, 0, 0.5)';
+          e.target.style.transform = 'scale(1)';
+        }
+      },
+      soundEnabled
+        ? React.createElement(
+            'svg',
+            {
+              width: getViewportSize().width < 768 ? '24' : '28',
+              height: getViewportSize().width < 768 ? '24' : '28',
+              viewBox: '0 0 24 24',
+              fill: 'none',
+              stroke: '#00ff00',
+              strokeWidth: '2',
+              strokeLinecap: 'round',
+              strokeLinejoin: 'round'
+            },
+            React.createElement('path', { d: 'M11 5L6 9H2v6h4l5 4V5z' }),
+            React.createElement('path', { d: 'M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07' })
+          )
+        : React.createElement(
+            'svg',
+            {
+              width: getViewportSize().width < 768 ? '24' : '28',
+              height: getViewportSize().width < 768 ? '24' : '28',
+              viewBox: '0 0 24 24',
+              fill: 'none',
+              stroke: '#00ff00',
+              strokeWidth: '2',
+              strokeLinecap: 'round',
+              strokeLinejoin: 'round'
+            },
+            React.createElement('path', { d: 'M11 5L6 9H2v6h4l5 4V5z' }),
+            React.createElement('line', { x1: '23', y1: '9', x2: '17', y2: '15' }),
+            React.createElement('line', { x1: '17', y1: '9', x2: '23', y2: '15' })
+          )
     ),
     // Joystick control
     (() => {
