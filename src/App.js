@@ -6,6 +6,339 @@ const getViewportSize = () => {
   };
 };
 
+// Dark MIDI Music Generator
+const DarkMusicGenerator = () => {
+  const audioContextRef = React.useRef(null);
+  const oscillatorsRef = React.useRef([]);
+  const gainNodeRef = React.useRef(null);
+  const reverbConvolverRef = React.useRef(null);
+  const distortionRef = React.useRef(null);
+  const isPlayingRef = React.useRef(false);
+  const intervalRef = React.useRef(null);
+
+  // Dark minor scale notes (in MIDI note numbers, lower octaves for darkness)
+  const darkScale = [36, 39, 41, 43, 46, 48, 51, 53]; // C, Eb, F, G, Bb, C, Eb, F (minor pentatonic +)
+  const darkChords = [
+    [36, 39, 43], // Cm
+    [39, 43, 46], // Ebm
+    [41, 44, 48], // Fm
+    [43, 46, 51], // Gm
+    [36, 43, 48]  // Cm (inversion)
+  ];
+
+  // Upper harmonized notes (2 octaves higher for bright contrast)
+  const getUpperHarmony = (baseNote) => {
+    return baseNote + 24; // 2 octaves up
+  };
+
+  const createReverbImpulse = (audioContext, duration = 2, decay = 2) => {
+    const sampleRate = audioContext.sampleRate;
+    const length = sampleRate * duration;
+    const impulse = audioContext.createBuffer(2, length, sampleRate);
+    const impulseL = impulse.getChannelData(0);
+    const impulseR = impulse.getChannelData(1);
+
+    for (let i = 0; i < length; i++) {
+      const n = length - i;
+      impulseL[i] = (Math.random() * 2 - 1) * Math.pow(n / length, decay);
+      impulseR[i] = (Math.random() * 2 - 1) * Math.pow(n / length, decay);
+    }
+    return impulse;
+  };
+
+  const createDistortion = (audioContext, amount = 50) => {
+    const distortion = audioContext.createWaveShaper();
+    const samples = 44100;
+    const curve = new Float32Array(samples);
+    const deg = Math.PI / 180;
+
+    for (let i = 0; i < samples; i++) {
+      const x = (i * 2) / samples - 1;
+      curve[i] = ((3 + amount) * x * 20 * deg) / (Math.PI + amount * Math.abs(x));
+    }
+
+    distortion.curve = curve;
+    distortion.oversample = '4x';
+    return distortion;
+  };
+
+  const initAudio = () => {
+    if (!audioContextRef.current) {
+      audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
+      
+      // Main gain for overall volume
+      gainNodeRef.current = audioContextRef.current.createGain();
+      gainNodeRef.current.gain.value = 0.15;
+      gainNodeRef.current.connect(audioContextRef.current.destination);
+
+      // Create reverb
+      reverbConvolverRef.current = audioContextRef.current.createConvolver();
+      reverbConvolverRef.current.buffer = createReverbImpulse(audioContextRef.current, 3, 2);
+      
+      // Create distortion for upper notes
+      distortionRef.current = createDistortion(audioContextRef.current, 40);
+      
+      // Connect reverb to main gain
+      reverbConvolverRef.current.connect(gainNodeRef.current);
+    }
+  };
+
+  const midiToFrequency = (midiNote) => {
+    return 440 * Math.pow(2, (midiNote - 69) / 12);
+  };
+
+  const playNote = (midiNote, duration, delay = 0, volume = 0.3, useEffects = false) => {
+    if (!audioContextRef.current) return;
+
+    const oscillator = audioContextRef.current.createOscillator();
+    const gainNode = audioContextRef.current.createGain();
+    
+    oscillator.type = 'sine'; // Darker, smoother sound
+    oscillator.frequency.value = midiToFrequency(midiNote);
+    
+    gainNode.gain.setValueAtTime(0, audioContextRef.current.currentTime + delay);
+    gainNode.gain.linearRampToValueAtTime(volume, audioContextRef.current.currentTime + delay + 0.1);
+    gainNode.gain.exponentialRampToValueAtTime(0.01, audioContextRef.current.currentTime + delay + duration);
+    
+    oscillator.connect(gainNode);
+    
+    // Route through distortion and reverb for upper notes
+    if (useEffects) {
+      gainNode.connect(distortionRef.current);
+      distortionRef.current.connect(reverbConvolverRef.current);
+    } else {
+      gainNode.connect(gainNodeRef.current);
+    }
+    
+    oscillator.start(audioContextRef.current.currentTime + delay);
+    oscillator.stop(audioContextRef.current.currentTime + delay + duration);
+  };
+
+  const playDarkChord = () => {
+    if (!isPlayingRef.current || !audioContextRef.current) return;
+
+    // Random chord from dark scale
+    const chord = darkChords[Math.floor(Math.random() * darkChords.length)];
+    const baseDelay = Math.random() * 0.5;
+    
+    // Play chord notes with slight delays for atmosphere
+    chord.forEach((note, index) => {
+      const delay = baseDelay + (index * 0.1);
+      const duration = 2 + Math.random() * 3; // Long, sustained notes
+      const volume = 0.2 + Math.random() * 0.15;
+      playNote(note, duration, delay, volume, false);
+      
+      // Add harmonized upper notes with distortion and reverb
+      const upperNote = getUpperHarmony(note);
+      const upperDelay = delay + 0.2 + Math.random() * 0.3; // Slight delay for harmony effect
+      const upperDuration = duration * 0.8; // Slightly shorter
+      const upperVolume = (volume * 0.6) + Math.random() * 0.1; // Softer but present
+      playNote(upperNote, upperDuration, upperDelay, upperVolume, true);
+    });
+
+    // Add a random bass note (very low, very dark)
+    const bassNote = darkScale[0] - 12; // Octave lower
+    playNote(bassNote, 3 + Math.random() * 2, baseDelay, 0.15, false);
+  };
+
+  const playDarkMelody = () => {
+    if (!isPlayingRef.current || !audioContextRef.current) return;
+
+    // Random melody from dark scale
+    const noteCount = 2 + Math.floor(Math.random() * 3);
+    for (let i = 0; i < noteCount; i++) {
+      const note = darkScale[Math.floor(Math.random() * darkScale.length)];
+      const delay = i * (0.8 + Math.random() * 0.4);
+      const duration = 1.5 + Math.random() * 1.5;
+      const volume = 0.15 + Math.random() * 0.1;
+      playNote(note, duration, delay, volume, false);
+      
+      // Add harmonized upper note with effects (random chance for variety)
+      if (Math.random() > 0.3) {
+        const upperNote = getUpperHarmony(note);
+        const upperDelay = delay + 0.15 + Math.random() * 0.2;
+        const upperDuration = duration * 0.7;
+        const upperVolume = volume * 0.5;
+        playNote(upperNote, upperDuration, upperDelay, upperVolume, true);
+      }
+    }
+  };
+
+  const startMusic = () => {
+    if (isPlayingRef.current) return;
+    
+    initAudio();
+    isPlayingRef.current = true;
+
+    // Resume audio context if suspended (browser autoplay policy)
+    if (audioContextRef.current.state === 'suspended') {
+      audioContextRef.current.resume();
+    }
+
+    // Play initial chord
+    playDarkChord();
+
+    // Play chords periodically (every 3-5 seconds)
+    const chordInterval = setInterval(() => {
+      if (isPlayingRef.current) {
+        playDarkChord();
+      }
+    }, 3000 + Math.random() * 2000);
+
+    // Play melodies periodically (every 2-4 seconds)
+    const melodyInterval = setInterval(() => {
+      if (isPlayingRef.current) {
+        playDarkMelody();
+      }
+    }, 2000 + Math.random() * 2000);
+
+    intervalRef.current = { chordInterval, melodyInterval };
+  };
+
+  // Play a step sound based on tile position (random but consistent per tile)
+  const playStepSound = (tileX, tileY) => {
+    if (!audioContextRef.current) {
+      initAudio();
+    }
+    
+    // Resume audio context if suspended
+    if (audioContextRef.current.state === 'suspended') {
+      audioContextRef.current.resume();
+    }
+    
+    // Create a deterministic but random note based on tile position
+    // This ensures each tile always plays the same note
+    const seed = (tileX * 1000 + tileY) % 1000;
+    const pseudoRandom = () => {
+      let value = Math.sin(seed) * 10000;
+      return value - Math.floor(value);
+    };
+    
+    // Get a random note from the dark scale based on tile position
+    const noteIndex = Math.floor(pseudoRandom() * darkScale.length);
+    const baseNote = darkScale[noteIndex];
+    
+    // Vary the octave slightly based on position (adds variety)
+    const octaveOffset = Math.floor(pseudoRandom() * 3) - 1; // -1, 0, or +1 octave
+    const stepNote = baseNote + (octaveOffset * 12);
+    
+    // Play a short, percussive note for the step
+    const duration = 0.2 + pseudoRandom() * 0.15; // Short, snappy
+    const volume = 0.25 + pseudoRandom() * 0.15; // Noticeable but not overwhelming
+    
+    // Random delay between 500ms and 1s (0.5 to 1.0 seconds)
+    const delay = 0.5 + Math.random() * 0.5;
+    
+    // Sometimes add the harmonized upper note with effects
+    if (pseudoRandom() > 0.5) {
+      const upperNote = stepNote + 24; // 2 octaves up
+      playNote(upperNote, duration * 0.6, delay + 0.05, volume * 0.4, true);
+    }
+    
+    playNote(stepNote, duration, delay, volume, false);
+  };
+
+  const stopMusic = () => {
+    isPlayingRef.current = false;
+    if (intervalRef.current) {
+      clearInterval(intervalRef.current.chordInterval);
+      clearInterval(intervalRef.current.melodyInterval);
+      intervalRef.current = null;
+    }
+    // Stop all oscillators
+    if (oscillatorsRef.current) {
+      oscillatorsRef.current.forEach(osc => {
+        try { osc.stop(); } catch (e) {}
+      });
+      oscillatorsRef.current = [];
+    }
+  };
+
+  React.useEffect(() => {
+    return () => {
+      stopMusic();
+      if (audioContextRef.current) {
+        audioContextRef.current.close();
+      }
+    };
+  }, []);
+
+  // Play lose sound - very dark and long note
+  const playLoseSound = () => {
+    if (!audioContextRef.current) {
+      initAudio();
+    }
+    
+    if (audioContextRef.current.state === 'suspended') {
+      audioContextRef.current.resume();
+    }
+    
+    // Very low, dark note (2 octaves below the lowest scale note)
+    const darkNote = darkScale[0] - 24; // Very deep bass
+    const duration = 4; // Long note
+    const volume = 0.4; // Noticeable but not overwhelming
+    
+    playNote(darkNote, duration, 0, volume, false);
+  };
+
+  // Play win sound - high note with reverb
+  const playWinSound = () => {
+    if (!audioContextRef.current) {
+      initAudio();
+    }
+    
+    if (audioContextRef.current.state === 'suspended') {
+      audioContextRef.current.resume();
+    }
+    
+    // High note (2 octaves above the highest scale note)
+    const highNote = darkScale[darkScale.length - 1] + 24; // Very high
+    const duration = 2; // Medium length
+    const volume = 0.35; // Bright and clear
+    
+    // Play with reverb (useEffects = true)
+    playNote(highNote, duration, 0, volume, true);
+  };
+
+  // Play drum kick sound for bullet shots
+  const playDrumKick = () => {
+    if (!audioContextRef.current) {
+      initAudio();
+    }
+    
+    if (audioContextRef.current.state === 'suspended') {
+      audioContextRef.current.resume();
+    }
+    
+    const now = audioContextRef.current.currentTime;
+    
+    // Pure bass drum kick - only low frequencies, no high frequencies
+    const kickOsc = audioContextRef.current.createOscillator();
+    const kickGain = audioContextRef.current.createGain();
+    
+    kickOsc.type = 'sine'; // Pure sine wave for clean bass
+    // Very low frequencies for deep bass kick drum
+    kickOsc.frequency.setValueAtTime(50, now);
+    kickOsc.frequency.exponentialRampToValueAtTime(30, now + 0.05);
+    kickOsc.frequency.exponentialRampToValueAtTime(25, now + 0.15);
+    
+    // Sharp attack, quick decay for punchy kick
+    kickGain.gain.setValueAtTime(0, now);
+    kickGain.gain.linearRampToValueAtTime(0.9, now + 0.001); // Very quick attack
+    kickGain.gain.exponentialRampToValueAtTime(0.4, now + 0.02);
+    kickGain.gain.exponentialRampToValueAtTime(0.01, now + 0.25); // Quick decay
+    
+    kickOsc.connect(kickGain);
+    kickGain.connect(gainNodeRef.current);
+    
+    // Start the kick
+    kickOsc.start(now);
+    kickOsc.stop(now + 0.25);
+  };
+
+  return { startMusic, stopMusic, playStepSound, playLoseSound, playWinSound, playDrumKick };
+};
+
 const IsometricGame = () => {
   const canvasRef = React.useRef(null);
   const canvasContainerRef = React.useRef(null);
@@ -27,6 +360,15 @@ const IsometricGame = () => {
   const [joystickPos, setJoystickPos] = React.useState({ x: 0, y: 0 });
   const [isJoystickActive, setIsJoystickActive] = React.useState(false);
   const joystickDirectionRef = React.useRef({ x: 0, y: 0 });
+  
+  // Music generator
+  const musicGenerator = DarkMusicGenerator();
+  const musicGeneratorRef = React.useRef(musicGenerator);
+  
+  // Update ref when musicGenerator changes
+  React.useEffect(() => {
+    musicGeneratorRef.current = musicGenerator;
+  }, [musicGenerator]);
 
   // Random grid size between 24 and 50 - tile dimensions will scale to fit
   const [GRID_SIZE] = React.useState(() => Math.floor(Math.random() * (20 - 10 + 1)) + 10);
@@ -146,6 +488,29 @@ const IsometricGame = () => {
 
   React.useEffect(() => {
     setGameMap(generateRandomMap());
+  }, []);
+
+  // Start music on first user interaction (handles browser autoplay policy)
+  React.useEffect(() => {
+    let musicStarted = false;
+    const startMusicOnInteraction = () => {
+      if (!musicStarted) {
+        musicGenerator.startMusic();
+        musicStarted = true;
+      }
+    };
+
+    // Try to start on any user interaction
+    window.addEventListener('click', startMusicOnInteraction, { once: true });
+    window.addEventListener('keydown', startMusicOnInteraction, { once: true });
+    window.addEventListener('touchstart', startMusicOnInteraction, { once: true });
+
+    return () => {
+      window.removeEventListener('click', startMusicOnInteraction);
+      window.removeEventListener('keydown', startMusicOnInteraction);
+      window.removeEventListener('touchstart', startMusicOnInteraction);
+      musicGenerator.stopMusic();
+    };
   }, []);
 
   const toIsometric = (x, y, tileWidth = tileDimensionsRef.current.width, tileHeight = tileDimensionsRef.current.height) => {
@@ -406,6 +771,9 @@ const IsometricGame = () => {
     if (canMoveTo(newX, newY)) {
       setBallPos({ x: newX, y: newY });
 
+      // Play step sound based on tile position
+      musicGenerator.playStepSound(newX, newY);
+
       // Increment steps taken (score)
       setScore(prev => prev + 1);
 
@@ -416,6 +784,8 @@ const IsometricGame = () => {
         // Check if out of steps
         if (newRemaining <= 0) {
           setGameState('lost');
+          // Play lose sound - very dark and long note
+          musicGenerator.playLoseSound();
           return 0;
         }
 
@@ -428,6 +798,8 @@ const IsometricGame = () => {
         // Check for end point (win condition)
         if (newX === endPoint.x && newY === endPoint.y) {
           setGameState('won');
+          // Play win sound - high note with reverb
+          musicGenerator.playWinSound();
           // Add 100 steps when you win
           return newRemaining + 100;
         }
@@ -534,6 +906,11 @@ const IsometricGame = () => {
             if (distance > 0 && distance < 8) { // Reduced shooting range
               const bulletDx = (dx / distance) * 0.15; // Slower bullets
               const bulletDy = (dy / distance) * 0.15;
+
+              // Play drum kick for each shot
+              if (musicGeneratorRef.current && musicGeneratorRef.current.playDrumKick) {
+                musicGeneratorRef.current.playDrumKick();
+              }
 
               setBullets(prev => [...prev, {
                 x: newEnemy.x,
@@ -654,6 +1031,11 @@ const IsometricGame = () => {
   }, [ballPos, gameMap, GRID_SIZE, endPoint, enemies, bullets]);
 
   const resetGame = () => {
+    // Penalty: lose 5000 steps when skipping with space
+    setStepsRemaining(prev => {
+      const newSteps = Math.max(0, prev - 5000);
+      return newSteps;
+    });
     setGameState('playing');
     setGameMap(generateRandomMap());
   };
