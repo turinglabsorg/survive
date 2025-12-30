@@ -421,33 +421,38 @@ const IsometricGame = () => {
   React.useEffect(() => {
     const handleKeyPress = (e) => {
       switch (e.key.toLowerCase()) {
+        // Screen up -> isometric up-left
         case 'arrowup':
         case 'w':
-          moveBall(0, -1);
+          moveBall(-1, -1);
           break;
+        // Screen down -> isometric down-right
         case 'arrowdown':
         case 's':
-          moveBall(0, 1);
+          moveBall(1, 1);
           break;
+        // Screen left -> isometric left (horizontal)
         case 'arrowleft':
         case 'a':
-          moveBall(-1, 0);
+          moveBall(-1, 1);
           break;
+        // Screen right -> isometric right (horizontal)
         case 'arrowright':
         case 'd':
+          moveBall(1, -1);
+          break;
+        // Diagonals (relative to screen)
+        case 'q': // up-left
+          moveBall(-1, 0);
+          break;
+        case 'e': // up-right
+          moveBall(0, -1);
+          break;
+        case 'z': // down-left
+          moveBall(0, 1);
+          break;
+        case 'c': // down-right
           moveBall(1, 0);
-          break;
-        case 'q':
-          moveBall(-1, -1); // Diagonal up-left
-          break;
-        case 'e':
-          moveBall(1, -1); // Diagonal up-right
-          break;
-        case 'z':
-          moveBall(-1, 1); // Diagonal down-left
-          break;
-        case 'c':
-          moveBall(1, 1); // Diagonal down-right
           break;
         case ' ':
           resetGame();
@@ -678,23 +683,42 @@ const IsometricGame = () => {
       const normalizedX = Math.cos(angle);
       const normalizedY = Math.sin(angle);
 
-      // Determine 8-direction movement
+      // Determine 8-direction movement in screen space, then map to isometric grid
       const absX = Math.abs(normalizedX);
       const absY = Math.abs(normalizedY);
 
+      let screenX = 0;
+      let screenY = 0;
+
       if (absX > absY) {
-        // Horizontal movement dominant
-        moveX = normalizedX > 0 ? 1 : -1;
+        screenX = normalizedX > 0 ? 1 : -1;
         if (absY > 0.5) {
-          moveY = normalizedY > 0 ? 1 : -1;
+          screenY = normalizedY > 0 ? 1 : -1;
         }
       } else {
-        // Vertical movement dominant
-        moveY = normalizedY > 0 ? 1 : -1;
+        screenY = normalizedY > 0 ? 1 : -1;
         if (absX > 0.5) {
-          moveX = normalizedX > 0 ? 1 : -1;
+          screenX = normalizedX > 0 ? 1 : -1;
         }
       }
+
+      // Map screen directions to isometric grid deltas
+      const mapScreenToIso = (sx, sy) => {
+        // Screen up/down/left/right and diagonals mapped to iso grid (x,y)
+        if (sx === 0 && sy === -1) return { x: -1, y: -1 }; // up
+        if (sx === 0 && sy === 1) return { x: 1, y: 1 };   // down
+        if (sx === -1 && sy === 0) return { x: -1, y: 1 }; // left
+        if (sx === 1 && sy === 0) return { x: 1, y: -1 };  // right
+        if (sx === 1 && sy === -1) return { x: 0, y: -1 }; // up-right
+        if (sx === -1 && sy === -1) return { x: -1, y: 0 }; // up-left
+        if (sx === 1 && sy === 1) return { x: 1, y: 0 };   // down-right
+        if (sx === -1 && sy === 1) return { x: 0, y: 1 };  // down-left
+        return { x: 0, y: 0 };
+      };
+
+      const isoDir = mapScreenToIso(screenX, screenY);
+      moveX = isoDir.x;
+      moveY = isoDir.y;
 
       // IMPORTANT: Always update direction when outside dead zone
       // This ensures direction persists even when at boundary
