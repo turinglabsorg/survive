@@ -10,6 +10,8 @@ const IsometricGame = () => {
   const canvasRef = React.useRef(null);
   const canvasContainerRef = React.useRef(null);
   const tileDimensionsRef = React.useRef({ width: 20, height: 10 });
+  const joystickRef = React.useRef(null);
+  const joystickHandleRef = React.useRef(null);
   const [ballPos, setBallPos] = React.useState({ x: 0, y: 0 });
   const [endPoint, setEndPoint] = React.useState({ x: 0, y: 0 });
   const [gameState, setGameState] = React.useState('playing');
@@ -18,9 +20,13 @@ const IsometricGame = () => {
   const [maxSteps, setMaxSteps] = React.useState(0);
   const [enemies, setEnemies] = React.useState([]);
   const [bullets, setBullets] = React.useState([]);
+  const [joystickPos, setJoystickPos] = React.useState({ x: 0, y: 0 });
+  const [isJoystickActive, setIsJoystickActive] = React.useState(false);
+  const joystickDirectionRef = React.useRef({ x: 0, y: 0 });
 
   // Random grid size between 24 and 50 - tile dimensions will scale to fit
   const [GRID_SIZE] = React.useState(() => Math.floor(Math.random() * (20 - 10 + 1)) + 10);
+  const MOVE_INTERVAL_MS = 250; // Movement cadence (0.5s per step)
 
   // Calculate tile dimensions dynamically to fit viewport
   const calculateTileDimensions = (canvasWidth, canvasHeight) => {
@@ -78,7 +84,7 @@ const IsometricGame = () => {
 
     // Calculate Manhattan distance for dynamic scoring
     const manhattanDistance = Math.abs(endX - startX) + Math.abs(endY - startY);
-    const calculatedMaxSteps = Math.ceil(manhattanDistance * 1.5) + 10; // Buffer for detours
+    const calculatedMaxSteps = (Math.ceil(manhattanDistance * 1.5) + 10) * 1000; // Buffer for detours, multiplied by 1000 for joystick
 
     // Clear start and end areas
     for (let dy = -1; dy <= 1; dy++) {
@@ -414,22 +420,34 @@ const IsometricGame = () => {
 
   React.useEffect(() => {
     const handleKeyPress = (e) => {
-      switch (e.key) {
-        case 'ArrowUp':
+      switch (e.key.toLowerCase()) {
+        case 'arrowup':
         case 'w':
           moveBall(0, -1);
           break;
-        case 'ArrowDown':
+        case 'arrowdown':
         case 's':
           moveBall(0, 1);
           break;
-        case 'ArrowLeft':
+        case 'arrowleft':
         case 'a':
           moveBall(-1, 0);
           break;
-        case 'ArrowRight':
+        case 'arrowright':
         case 'd':
           moveBall(1, 0);
+          break;
+        case 'q':
+          moveBall(-1, -1); // Diagonal up-left
+          break;
+        case 'e':
+          moveBall(1, -1); // Diagonal up-right
+          break;
+        case 'z':
+          moveBall(-1, 1); // Diagonal down-left
+          break;
+        case 'c':
+          moveBall(1, 1); // Diagonal down-right
           break;
         case ' ':
           resetGame();
@@ -605,6 +623,150 @@ const IsometricGame = () => {
     setGameMap(generateRandomMap());
   };
 
+  // Joystick handlers
+  const getJoystickCenter = () => {
+    if (!joystickRef.current) return { x: 0, y: 0 };
+    const rect = joystickRef.current.getBoundingClientRect();
+    return {
+      x: rect.left + rect.width / 2,
+      y: rect.top + rect.height / 2
+    };
+  };
+
+  const getJoystickRadius = () => {
+    if (!joystickRef.current) return 0;
+    return joystickRef.current.offsetWidth / 2;
+  };
+
+  const updateJoystickPosition = (clientX, clientY) => {
+    const center = getJoystickCenter();
+    const radius = getJoystickRadius();
+    const handleRadius = radius * 0.3; // Handle is 30% of boundary radius
+
+    const dx = clientX - center.x;
+    const dy = clientY - center.y;
+    const distance = Math.sqrt(dx * dx + dy * dy);
+    const maxDistance = radius - handleRadius;
+    const angle = Math.atan2(dy, dx);
+
+    // Clamp visual position to boundary (handle stays at edge)
+    const clampedDistance = Math.min(distance, maxDistance);
+    const newX = Math.cos(angle) * clampedDistance;
+    const newY = Math.sin(angle) * clampedDistance;
+
+    setJoystickPos({ x: newX, y: newY });
+
+    // Calculate movement direction (8 directions) - use actual distance, not clamped
+    // This ensures direction is maintained even when joystick is at/past boundary
+    let moveX = 0;
+    let moveY = 0;
+
+    // Use actual distance to calculate direction (not clamped)
+    // This way, even when at boundary, direction is maintained
+    if (distance > maxDistance * 0.2) { // Dead zone threshold
+      const normalizedX = Math.cos(angle);
+      const normalizedY = Math.sin(angle);
+
+      // Determine 8-direction movement
+      const absX = Math.abs(normalizedX);
+      const absY = Math.abs(normalizedY);
+
+      if (absX > absY) {
+        // Horizontal movement dominant
+        moveX = normalizedX > 0 ? 1 : -1;
+        if (absY > 0.5) {
+          moveY = normalizedY > 0 ? 1 : -1;
+        }
+      } else {
+        // Vertical movement dominant
+        moveY = normalizedY > 0 ? 1 : -1;
+        if (absX > 0.5) {
+          moveX = normalizedX > 0 ? 1 : -1;
+        }
+      }
+
+      // IMPORTANT: Always update direction when outside dead zone
+      // This ensures direction persists even when at boundary
+      // The interval will pick this up and keep moving
+      joystickDirectionRef.current = { x: moveX, y: moveY };
+    } else {
+      // Only reset direction when in dead zone
+      joystickDirectionRef.current = { x: 0, y: 0 };
+    }
+  };
+
+  // Continuous movement effect while joystick is active
+  React.useEffect(() => {
+    if (!isJoystickActive || gameState !== 'playing') {
+      return;
+    }
+
+    // Continue moving continuously - step by step
+    // This interval runs as long as joystick is active, checking direction each time
+    const intervalId = setInterval(() => {
+      // Always check the current direction from ref (works even at boundary)
+      // The ref is updated by updateJoystickPosition, so it always has the latest direction
+      const currentDir = joystickDirectionRef.current;
+
+      // Keep moving as long as there's a direction - this continues even when at boundary
+      // This will keep calling moveBall at the configured cadence as long as direction is not (0,0)
+      if (currentDir.x !== 0 || currentDir.y !== 0) {
+        moveBall(currentDir.x, currentDir.y);
+      }
+    }, MOVE_INTERVAL_MS); // Controlled cadence per step
+
+    return () => clearInterval(intervalId);
+  }, [isJoystickActive, gameState, ballPos, gameMap]);
+
+  const handleJoystickStart = (e) => {
+    setIsJoystickActive(true);
+    const clientX = e?.touches ? e.touches[0]?.clientX : e?.clientX;
+    const clientY = e?.touches ? e.touches[0]?.clientY : e?.clientY;
+    if (clientX !== undefined && clientY !== undefined) {
+      updateJoystickPosition(clientX, clientY);
+    }
+  };
+
+  const handleJoystickMove = (e) => {
+    if (!isJoystickActive) return;
+    const clientX = e?.touches ? e.touches[0]?.clientX : e?.clientX;
+    const clientY = e?.touches ? e.touches[0]?.clientY : e?.clientY;
+    if (clientX !== undefined && clientY !== undefined) {
+      updateJoystickPosition(clientX, clientY);
+    }
+  };
+
+  const handleJoystickEnd = () => {
+    setIsJoystickActive(false);
+    setJoystickPos({ x: 0, y: 0 });
+    joystickDirectionRef.current = { x: 0, y: 0 };
+  };
+
+  // Add global event listeners for joystick
+  React.useEffect(() => {
+    if (!isJoystickActive) return;
+
+    const handleMove = (e) => {
+      handleJoystickMove(e);
+    };
+
+    const handleEnd = (e) => {
+      handleJoystickEnd(e);
+    };
+
+    window.addEventListener('mousemove', handleMove);
+    window.addEventListener('mouseup', handleEnd);
+    window.addEventListener('touchmove', handleMove, { passive: false });
+    window.addEventListener('touchend', handleEnd);
+
+    return () => {
+      window.removeEventListener('mousemove', handleMove);
+      window.removeEventListener('mouseup', handleEnd);
+      window.removeEventListener('touchmove', handleMove);
+      window.removeEventListener('touchend', handleEnd);
+    };
+  }, [isJoystickActive]);
+
   return React.createElement(
     'div',
     {
@@ -639,95 +801,67 @@ const IsometricGame = () => {
         }
       }
     ),
-    // Mobile controls
-    React.createElement(
-      'div',
-      {
-        style: {
-          position: 'fixed',
-          bottom: getViewportSize().width < 768 ? '-10px' : '20px', // Leave space for score at bottom on mobile
-          left: '50%',
-          transform: 'translateX(-50%)',
-          display: getViewportSize().width < 768 ? 'grid' : 'none', // Only show on mobile
-          gridTemplateColumns: 'repeat(3, 60px)',
-          gridTemplateRows: 'repeat(3, 60px)',
-          gap: '10px',
-          zIndex: 20
-        }
-      },
-      // Up button
-      React.createElement(
-        'button',
+    // Joystick control
+    (() => {
+      const isMobile = getViewportSize().width < 768;
+      const joystickStyle = {
+        position: 'fixed',
+        bottom: isMobile ? '80px' : '30px',
+        width: '120px',
+        height: '120px',
+        borderRadius: '50%',
+        border: '2px solid #00ff00',
+        backgroundColor: 'rgba(0, 0, 0, 0.7)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        zIndex: 20,
+        cursor: 'pointer',
+        touchAction: 'none',
+        userSelect: 'none',
+        WebkitUserSelect: 'none',
+        WebkitTapHighlightColor: 'transparent',
+        outline: 'none'
+      };
+
+      if (isMobile) {
+        joystickStyle.left = '50%';
+        joystickStyle.transform = 'translateX(-50%)';
+      } else {
+        joystickStyle.right = '30px';
+      }
+
+      return React.createElement(
+        'div',
         {
-          onClick: () => moveBall(0, -1),
-          style: {
-            gridArea: '1 / 2',
-            backgroundColor: '#000000',
-            border: '2px solid #00ff00',
-            color: '#00ff00',
-            fontSize: '1.5rem',
-            fontFamily: '"Courier New", monospace',
-            cursor: 'pointer',
-            borderRadius: '5px'
-          }
+          ref: joystickRef,
+          onMouseDown: handleJoystickStart,
+          onTouchStart: handleJoystickStart,
+          style: joystickStyle
         },
-        '↑'
-      ),
-      // Left button
-      React.createElement(
-        'button',
-        {
-          onClick: () => moveBall(-1, 0),
-          style: {
-            gridArea: '2 / 1',
-            backgroundColor: '#000000',
-            border: '2px solid #00ff00',
-            color: '#00ff00',
-            fontSize: '1.5rem',
-            fontFamily: '"Courier New", monospace',
-            cursor: 'pointer',
-            borderRadius: '5px'
+        React.createElement(
+          'div',
+          {
+            ref: joystickHandleRef,
+            style: {
+              width: '36px',
+              height: '36px',
+              borderRadius: '50%',
+              backgroundColor: '#00ff00',
+              border: '1px solid #00ff00',
+              position: 'relative',
+              transform: `translate(${joystickPos.x}px, ${joystickPos.y}px)`,
+              transition: isJoystickActive ? 'none' : 'transform 0.2s ease-out',
+              boxShadow: '0 0 10px rgba(0, 255, 0, 0.5)',
+              userSelect: 'none',
+              WebkitUserSelect: 'none',
+              WebkitTapHighlightColor: 'transparent',
+              outline: 'none'
+            }
           }
-        },
-        '←'
-      ),
-      // Down button
-      React.createElement(
-        'button',
-        {
-          onClick: () => moveBall(0, 1),
-          style: {
-            gridArea: '2 / 2',
-            backgroundColor: '#000000',
-            border: '2px solid #00ff00',
-            color: '#00ff00',
-            fontSize: '1.5rem',
-            fontFamily: '"Courier New", monospace',
-            cursor: 'pointer',
-            borderRadius: '5px'
-          }
-        },
-        '↓'
-      ),
-      // Right button
-      React.createElement(
-        'button',
-        {
-          onClick: () => moveBall(1, 0),
-          style: {
-            gridArea: '2 / 3',
-            backgroundColor: '#000000',
-            border: '2px solid #00ff00',
-            color: '#00ff00',
-            fontSize: '1.5rem',
-            fontFamily: '"Courier New", monospace',
-            cursor: 'pointer',
-            borderRadius: '5px'
-          }
-        },
-        '→'
-      )
-    ),
+        )
+      );
+    })(),
     // Score display during gameplay - at the very bottom
     gameState === 'playing' && React.createElement(
       'div',
