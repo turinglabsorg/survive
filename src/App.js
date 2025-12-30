@@ -424,6 +424,12 @@ const IsometricGame = () => {
   const joystickRef = React.useRef(null);
   const joystickHandleRef = React.useRef(null);
   const [ballPos, setBallPos] = React.useState({ x: 0, y: 0 });
+  const ballPosRef = React.useRef({ x: 0, y: 0 });
+  
+  // Keep ballPosRef in sync with ballPos
+  React.useEffect(() => {
+    ballPosRef.current = ballPos;
+  }, [ballPos]);
   const [endPoint, setEndPoint] = React.useState({ x: 0, y: 0 });
   const [gameState, setGameState] = React.useState('playing');
   const [gameMap, setGameMap] = React.useState([]);
@@ -437,6 +443,16 @@ const IsometricGame = () => {
   const [joystickPos, setJoystickPos] = React.useState({ x: 0, y: 0 });
   const [isJoystickActive, setIsJoystickActive] = React.useState(false);
   const joystickDirectionRef = React.useRef({ x: 0, y: 0 });
+  const joystickDistanceRef = React.useRef(0); // Store distance from center for speed calculation
+  const isJoystickActiveRef = React.useRef(false);
+  const gameStateRef = React.useRef('playing');
+  const movementLoopActiveRef = React.useRef(false);
+  
+  // Keep gameStateRef in sync with gameState
+  React.useEffect(() => {
+    gameStateRef.current = gameState;
+  }, [gameState]);
+  
   const [soundEnabled, setSoundEnabled] = React.useState(() => {
     // Load sound preference from localStorage, default to true
     const saved = localStorage.getItem('survive_sound_enabled');
@@ -474,7 +490,8 @@ const IsometricGame = () => {
 
   // Random grid size between 24 and 50 - tile dimensions will scale to fit
   const [GRID_SIZE] = React.useState(() => Math.floor(Math.random() * (20 - 10 + 1)) + 10);
-  const MOVE_INTERVAL_MS = 250; // Movement cadence (0.5s per step)
+  const MOVE_INTERVAL_MS_MIN = 100; // Fastest movement (when joystick is at boundary)
+  const MOVE_INTERVAL_MS_MAX = 500; // Slowest movement (when joystick is near center)
 
   // Calculate tile dimensions dynamically to fit viewport
   const calculateTileDimensions = (canvasWidth, canvasHeight) => {
@@ -891,13 +908,17 @@ const IsometricGame = () => {
   };
 
   const moveBall = (dx, dy) => {
-    if (gameState !== 'playing') return;
+    if (gameStateRef.current !== 'playing') return;
 
-    const newX = ballPos.x + dx;
-    const newY = ballPos.y + dy;
+    // Use ref to get current position (always up-to-date)
+    const currentPos = ballPosRef.current;
+    const newX = currentPos.x + dx;
+    const newY = currentPos.y + dy;
 
     if (canMoveTo(newX, newY)) {
-      setBallPos({ x: newX, y: newY });
+      const newPos = { x: newX, y: newY };
+      setBallPos(newPos);
+      ballPosRef.current = newPos; // Update ref immediately for next move
 
       // Play step sound based on tile position
       musicGenerator.playStepSound(newX, newY, tileNoteMap);
@@ -1184,6 +1205,11 @@ const IsometricGame = () => {
 
     setJoystickPos({ x: newX, y: newY });
 
+    // Store the normalized distance (0 to 1) for speed calculation
+    // Use actual distance, not clamped, so it works even past boundary
+    const normalizedDistance = Math.min(distance / maxDistance, 1.5); // Allow up to 1.5x for past-boundary
+    joystickDistanceRef.current = normalizedDistance;
+
     // Calculate movement direction (8 directions) - use actual distance, not clamped
     // This ensures direction is maintained even when joystick is at/past boundary
     let moveX = 0;
@@ -1242,35 +1268,78 @@ const IsometricGame = () => {
     }
   };
 
-  // Continuous movement effect while joystick is active
+  // Continuous movement effect while joystick is active with variable speed
   React.useEffect(() => {
-    if (!isJoystickActive || gameState !== 'playing') {
+    // Only start if joystick becomes active and loop isn't already running
+    if (!isJoystickActive || movementLoopActiveRef.current) {
       return;
     }
 
-    // Continue moving continuously - step by step
-    // This interval runs as long as joystick is active, checking direction each time
-    const intervalId = setInterval(() => {
-      // Always check the current direction from ref (works even at boundary)
-      // The ref is updated by updateJoystickPosition, so it always has the latest direction
-      const currentDir = joystickDirectionRef.current;
+    movementLoopActiveRef.current = true;
+    
+    // Dynamic interval based on joystick distance from center
+    let timeoutId;
+    let isActive = true;
+    
+    const scheduleNextMove = () => {
+      if (!isActive || !movementLoopActiveRef.current) return;
+      
+      // Calculate speed based on distance from center
+      // Closer to center = slower (longer interval), farther = faster (shorter interval)
+      const normalizedDistance = Math.min(joystickDistanceRef.current, 1.0); // Cap at 1.0 for calculation
+      
+      // Map distance (0 to 1) to interval (MAX to MIN)
+      // Use exponential curve for smoother acceleration: closer to center is much slower
+      const speedFactor = Math.pow(normalizedDistance, 2); // Square for smoother acceleration curve
+      const currentInterval = MOVE_INTERVAL_MS_MAX - (speedFactor * (MOVE_INTERVAL_MS_MAX - MOVE_INTERVAL_MS_MIN));
+      
+      timeoutId = setTimeout(() => {
+        if (!isActive) return;
+        
+        // Always check the current direction from ref (works even at boundary)
+        const currentDir = joystickDirectionRef.current;
 
-      // Keep moving as long as there's a direction - this continues even when at boundary
-      // This will keep calling moveBall at the configured cadence as long as direction is not (0,0)
-      if (currentDir.x !== 0 || currentDir.y !== 0) {
-        moveBall(currentDir.x, currentDir.y);
+        // Keep moving as long as joystick is active
+        // Continue moving even if finger is still on joystick (not released)
+        if (isJoystickActiveRef.current && gameStateRef.current === 'playing') {
+          // Only move if there's a direction
+          if (currentDir.x !== 0 || currentDir.y !== 0) {
+            moveBall(currentDir.x, currentDir.y);
+          }
+        }
+        
+        // Always schedule next move if joystick is still active
+        // This ensures the loop continues and can pick up direction changes
+        if (isJoystickActiveRef.current) {
+          scheduleNextMove();
+        }
+      }, currentInterval);
+    };
+
+    // Start the movement loop immediately
+    scheduleNextMove();
+
+    return () => {
+      isActive = false;
+      movementLoopActiveRef.current = false;
+      if (timeoutId) {
+        clearTimeout(timeoutId);
       }
-    }, MOVE_INTERVAL_MS); // Controlled cadence per step
-
-    return () => clearInterval(intervalId);
-  }, [isJoystickActive, gameState, ballPos, gameMap]);
+    };
+  }, [isJoystickActive]); // Only depend on isJoystickActive, not gameState
 
   const handleJoystickStart = (e) => {
     setIsJoystickActive(true);
+    isJoystickActiveRef.current = true;
     const clientX = e?.touches ? e.touches[0]?.clientX : e?.clientX;
     const clientY = e?.touches ? e.touches[0]?.clientY : e?.clientY;
     if (clientX !== undefined && clientY !== undefined) {
       updateJoystickPosition(clientX, clientY);
+    } else {
+      // If no position, set a default direction to start movement
+      // This ensures movement starts even if position isn't detected
+      joystickDirectionRef.current = { x: 1, y: 0 };
+      joystickDistanceRef.current = 0.5; // Medium speed
     }
   };
 
@@ -1285,6 +1354,7 @@ const IsometricGame = () => {
 
   const handleJoystickEnd = () => {
     setIsJoystickActive(false);
+    isJoystickActiveRef.current = false;
     setJoystickPos({ x: 0, y: 0 });
     joystickDirectionRef.current = { x: 0, y: 0 };
   };
