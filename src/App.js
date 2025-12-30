@@ -9,6 +9,7 @@ const getViewportSize = () => {
 const IsometricGame = () => {
   const canvasRef = React.useRef(null);
   const canvasContainerRef = React.useRef(null);
+  const tileDimensionsRef = React.useRef({ width: 20, height: 10 });
   const [ballPos, setBallPos] = React.useState({ x: 0, y: 0 });
   const [endPoint, setEndPoint] = React.useState({ x: 0, y: 0 });
   const [gameState, setGameState] = React.useState('playing');
@@ -17,26 +18,34 @@ const IsometricGame = () => {
   const [maxSteps, setMaxSteps] = React.useState(0);
   const [enemies, setEnemies] = React.useState([]);
   const [bullets, setBullets] = React.useState([]);
-  
-// Calculate optimal grid size based on window dimensions
-  const TILE_WIDTH = 20;
-  const TILE_HEIGHT = 10;
-  
-  const viewport = getViewportSize();
-  
-  // Calculate maximum grid size that fits in viewport (much more conservative for mobile)
-  // Add padding to ensure grid stays within bounds (20px on each side, 200px for UI at top/bottom)
-  const padding = 40; // 20px on each side
-  const uiSpace = 200; // Space for title and controls
-  const availableWidth = viewport.width - padding;
-  const availableHeight = viewport.height - uiSpace - padding;
-  
-  const maxGridX = Math.floor(availableWidth / (TILE_WIDTH * 0.7));
-  const maxGridY = Math.floor(availableHeight / (TILE_HEIGHT * 1.8));
-  const GRID_SIZE = Math.min(maxGridX, maxGridY, 20); // Even smaller cap for mobile safety
-  
-  const BALL_RADIUS = 6;
-  
+
+  // Fixed grid size - tile dimensions will scale to fit
+  const GRID_SIZE = 12;
+
+  // Calculate tile dimensions dynamically to fit viewport
+  const calculateTileDimensions = (canvasWidth, canvasHeight) => {
+    const padding = 40; // 20px on each side
+    const topSpace = 100; // Space for title
+    const bottomSpace = 220; // Space for controls and score
+
+    const availableWidth = canvasWidth - padding;
+    const availableHeight = canvasHeight - topSpace - bottomSpace;
+
+    // For isometric grid: total width = (GRID_SIZE - 1) * TILE_WIDTH
+    // total height = (GRID_SIZE - 1) * TILE_HEIGHT
+    // We want TILE_WIDTH = 2 * TILE_HEIGHT for proper isometric look
+
+    const maxTileHeight = availableHeight / (GRID_SIZE - 1);
+    const maxTileWidthFromWidth = availableWidth / (GRID_SIZE - 1);
+
+    // Since TILE_WIDTH = 2 * TILE_HEIGHT, calculate based on both constraints
+    const tileHeightFromWidth = maxTileWidthFromWidth / 2;
+    const tileHeight = Math.min(maxTileHeight, tileHeightFromWidth);
+    const tileWidth = tileHeight * 2;
+
+    return { width: tileWidth, height: tileHeight };
+  };
+
   // Generate random map with start and end points
   const generateRandomMap = () => {
     const map = [];
@@ -54,23 +63,23 @@ const IsometricGame = () => {
       }
       map.push(row);
     }
-    
+
     // Generate random start and end points
     const startX = Math.floor(Math.random() * GRID_SIZE);
     const startY = Math.floor(Math.random() * GRID_SIZE);
     let endX, endY;
-    
+
     // Ensure end point is far from start
     do {
       endX = Math.floor(Math.random() * GRID_SIZE);
       endY = Math.floor(Math.random() * GRID_SIZE);
-    } while (Math.abs(endX - startX) < Math.floor(GRID_SIZE / 3) || 
-             Math.abs(endY - startY) < Math.floor(GRID_SIZE / 3));
-    
+    } while (Math.abs(endX - startX) < Math.floor(GRID_SIZE / 3) ||
+      Math.abs(endY - startY) < Math.floor(GRID_SIZE / 3));
+
     // Calculate Manhattan distance for dynamic scoring
     const manhattanDistance = Math.abs(endX - startX) + Math.abs(endY - startY);
     const calculatedMaxSteps = Math.ceil(manhattanDistance * 1.5) + 10; // Buffer for detours
-    
+
     // Clear start and end areas
     for (let dy = -1; dy <= 1; dy++) {
       for (let dx = -1; dx <= 1; dx++) {
@@ -80,7 +89,7 @@ const IsometricGame = () => {
         if (sx >= 0 && sx < GRID_SIZE && sy >= 0 && sy < GRID_SIZE) {
           map[sy][sx] = 0;
         }
-        
+
         // Clear end area
         const ex = endX + dx;
         const ey = endY + dy;
@@ -89,7 +98,7 @@ const IsometricGame = () => {
         }
       }
     }
-    
+
     // Generate enemies
     const enemyCount = Math.min(4, Math.floor(GRID_SIZE / 8)); // Fewer enemies for mobile
     const newEnemies = [];
@@ -99,7 +108,7 @@ const IsometricGame = () => {
         ex = Math.floor(Math.random() * GRID_SIZE);
         ey = Math.floor(Math.random() * GRID_SIZE);
       } while (map[ey][ex] !== 0 || (Math.abs(ex - startX) < 3 && Math.abs(ey - startY) < 3));
-      
+
       newEnemies.push({
         x: ex,
         y: ey,
@@ -107,7 +116,7 @@ const IsometricGame = () => {
         shootTimer: Math.floor(Math.random() * 60) + 30
       });
     }
-    
+
     // Set ball position, end point, score, and enemies
     setBallPos({ x: startX, y: startY });
     setEndPoint({ x: endX, y: endY });
@@ -115,93 +124,97 @@ const IsometricGame = () => {
     setMaxSteps(calculatedMaxSteps);
     setEnemies(newEnemies);
     setBullets([]);
-    
+
     return map;
   };
-  
+
   React.useEffect(() => {
     setGameMap(generateRandomMap());
   }, []);
-  
-  const toIsometric = (x, y) => {
-    const isoX = (x - y) * (TILE_WIDTH / 2);
-    const isoY = (x + y) * (TILE_HEIGHT / 2);
+
+  const toIsometric = (x, y, tileWidth = tileDimensionsRef.current.width, tileHeight = tileDimensionsRef.current.height) => {
+    const isoX = (x - y) * (tileWidth / 2);
+    const isoY = (x + y) * (tileHeight / 2);
     return { x: isoX, y: isoY };
   };
-  
+
   const drawGrid = (ctx) => {
     // Set up clipping to ensure nothing draws outside canvas bounds
     ctx.save();
     ctx.beginPath();
     ctx.rect(0, 0, ctx.canvas.width, ctx.canvas.height);
     ctx.clip();
-    
+
+    const TILE_WIDTH = tileDimensionsRef.current.width;
+    const TILE_HEIGHT = tileDimensionsRef.current.height;
+
     ctx.strokeStyle = '#00ff00';
     ctx.lineWidth = 0.5;
-    
-// Center the grid perfectly in the viewport with padding
+
+    // Center the grid perfectly in the viewport with padding
     const corners = [
       toIsometric(0, 0),
       toIsometric(GRID_SIZE - 1, 0),
       toIsometric(0, GRID_SIZE - 1),
       toIsometric(GRID_SIZE - 1, GRID_SIZE - 1)
     ];
-    
+
     const minX = Math.min(...corners.map(c => c.x));
     const maxX = Math.max(...corners.map(c => c.x));
     const minY = Math.min(...corners.map(c => c.y));
     const maxY = Math.max(...corners.map(c => c.y));
-    
+
     const gridWidth = maxX - minX;
     const gridHeight = maxY - minY;
-    
-    const viewport = getViewportSize();
+
+    // Use actual canvas dimensions
+    const canvasWidth = ctx.canvas.width;
+    const canvasHeight = ctx.canvas.height;
     const padding = 20; // Padding on all sides
     const topSpace = 100; // Space for title
-    
-    // Calculate offset with padding, ensuring grid stays within bounds
-    const maxOffsetX = viewport.width - gridWidth - padding;
-    const maxOffsetY = viewport.height - gridHeight - padding;
-    const offsetX = Math.max(padding, Math.min(maxOffsetX, (viewport.width - gridWidth) / 2)) - minX;
-    const offsetY = Math.max(topSpace, Math.min(maxOffsetY, (viewport.height - gridHeight) / 2)) - minY;
-    
+
+    // Calculate offset to center grid
+    const offsetX = (canvasWidth - gridWidth) / 2 - minX;
+    const offsetY = topSpace + (canvasHeight - topSpace - 180 - gridHeight) / 2 - minY;
+
     for (let y = 0; y < GRID_SIZE; y++) {
       for (let x = 0; x < GRID_SIZE; x++) {
         const iso = toIsometric(x, y);
         const centerX = offsetX + iso.x;
         const centerY = offsetY + iso.y;
-        
+
         // Skip drawing if outside canvas bounds (with some margin for tile rendering)
         if (centerX < -TILE_WIDTH || centerX > ctx.canvas.width + TILE_WIDTH ||
-            centerY < -TILE_HEIGHT || centerY > ctx.canvas.height + TILE_HEIGHT) {
+          centerY < -TILE_HEIGHT || centerY > ctx.canvas.height + TILE_HEIGHT) {
           continue;
         }
-        
+
         // Draw tile outline
         ctx.beginPath();
         ctx.moveTo(centerX, centerY);
-        ctx.lineTo(centerX + TILE_WIDTH/2, centerY + TILE_HEIGHT/2);
+        ctx.lineTo(centerX + TILE_WIDTH / 2, centerY + TILE_HEIGHT / 2);
         ctx.lineTo(centerX, centerY + TILE_HEIGHT);
-        ctx.lineTo(centerX - TILE_WIDTH/2, centerY + TILE_HEIGHT/2);
+        ctx.lineTo(centerX - TILE_WIDTH / 2, centerY + TILE_HEIGHT / 2);
         ctx.closePath();
         ctx.stroke();
-        
+
         // Draw special tiles
         const tileType = gameMap[y]?.[x];
         if (tileType === 1) { // Wall
           ctx.fillStyle = '#ffffff';
-          ctx.fillRect(centerX - 2, centerY - 12, 4, 20);
+          const wallHeight = Math.max(12, TILE_HEIGHT * 1.2);
+          ctx.fillRect(centerX - 2, centerY - wallHeight, 4, wallHeight + TILE_HEIGHT * 0.8);
         } else if (tileType === 2) { // Yellow tile (trap)
           // Draw isometric yellow tile with softer color
           ctx.fillStyle = '#ffffcc'; // Lighter, softer yellow
           ctx.beginPath();
           ctx.moveTo(centerX, centerY);
-          ctx.lineTo(centerX + TILE_WIDTH/2, centerY + TILE_HEIGHT/2);
+          ctx.lineTo(centerX + TILE_WIDTH / 2, centerY + TILE_HEIGHT / 2);
           ctx.lineTo(centerX, centerY + TILE_HEIGHT);
-          ctx.lineTo(centerX - TILE_WIDTH/2, centerY + TILE_HEIGHT/2);
+          ctx.lineTo(centerX - TILE_WIDTH / 2, centerY + TILE_HEIGHT / 2);
           ctx.closePath();
           ctx.fill();
-          
+
           // Add subtle orange border
           ctx.strokeStyle = '#ffcc66'; // Lighter orange
           ctx.lineWidth = 0.5;
@@ -209,62 +222,61 @@ const IsometricGame = () => {
           ctx.strokeStyle = '#00ff00';
           ctx.lineWidth = 0.5;
         }
-        
+
         // Draw enemies
+        const enemySize = Math.max(6, TILE_HEIGHT * 0.8);
         enemies.forEach(enemy => {
           if (enemy.x === x && enemy.y === y) {
             const enemyIso = toIsometric(enemy.x, enemy.y);
             const enemyCenterX = offsetX + enemyIso.x;
             const enemyCenterY = offsetY + enemyIso.y;
-            
+
             // Skip if outside bounds
             if (enemyCenterX < -10 || enemyCenterX > ctx.canvas.width + 10 ||
-                enemyCenterY < -10 || enemyCenterY > ctx.canvas.height + 10) {
+              enemyCenterY < -10 || enemyCenterY > ctx.canvas.height + 10) {
               return;
             }
-            
+
             ctx.fillStyle = '#ff0000';
-            ctx.fillRect(enemyCenterX - 4, enemyCenterY - 4, 8, 8);
+            ctx.fillRect(enemyCenterX - enemySize / 2, enemyCenterY - enemySize / 2, enemySize, enemySize);
             ctx.strokeStyle = '#ff0000';
             ctx.lineWidth = 1;
-            ctx.strokeRect(enemyCenterX - 4, enemyCenterY - 4, 8, 8);
+            ctx.strokeRect(enemyCenterX - enemySize / 2, enemyCenterY - enemySize / 2, enemySize, enemySize);
             ctx.strokeStyle = '#00ff00';
             ctx.lineWidth = 0.5;
           }
         });
-        
+
         // Draw bullets
+        const bulletRadius = Math.max(2, TILE_HEIGHT * 0.3);
         bullets.forEach(bullet => {
           if (Math.floor(bullet.x) === x && Math.floor(bullet.y) === y) {
             const bulletIso = toIsometric(bullet.x, bullet.y);
             const bulletCenterX = offsetX + bulletIso.x;
             const bulletCenterY = offsetY + bulletIso.y;
-            
+
             // Skip if outside bounds
             if (bulletCenterX < -10 || bulletCenterX > ctx.canvas.width + 10 ||
-                bulletCenterY < -10 || bulletCenterY > ctx.canvas.height + 10) {
+              bulletCenterY < -10 || bulletCenterY > ctx.canvas.height + 10) {
               return;
             }
-            
+
             ctx.fillStyle = '#ff8800';
             ctx.beginPath();
-            ctx.arc(bulletCenterX, bulletCenterY, 3, 0, Math.PI * 2);
+            ctx.arc(bulletCenterX, bulletCenterY, bulletRadius, 0, Math.PI * 2);
             ctx.fill();
           }
         });
-        
+
         // Draw end point
         if (endPoint.x === x && endPoint.y === y) {
           const endIso = toIsometric(endPoint.x, endPoint.y);
           const endCenterX = offsetX + endIso.x;
           const endCenterY = offsetY + endIso.y;
-          
-          // Skip if outside bounds
-          if (endCenterX < -20 || endCenterX > ctx.canvas.width + 20 ||
-              endCenterY < -20 || endCenterY > ctx.canvas.height + 20) {
-            // Don't skip end point, but ensure it's visible
-          }
-          
+
+          const starOuterRadius = Math.max(8, TILE_HEIGHT * 1.2);
+          const starInnerRadius = starOuterRadius / 2;
+
           ctx.fillStyle = '#ffff00';
           ctx.strokeStyle = '#ffff00';
           ctx.lineWidth = 2;
@@ -272,14 +284,12 @@ const IsometricGame = () => {
           ctx.beginPath();
           for (let i = 0; i < 5; i++) {
             const angle = (i * 2 * Math.PI) / 5 - Math.PI / 2;
-            const outerRadius = 12;
-            const innerRadius = 6;
-            const outerX = endCenterX + Math.cos(angle) * outerRadius;
-            const outerY = endCenterY + Math.sin(angle) * outerRadius;
+            const outerX = endCenterX + Math.cos(angle) * starOuterRadius;
+            const outerY = endCenterY + Math.sin(angle) * starOuterRadius;
             const innerAngle = ((i + 0.5) * 2 * Math.PI) / 5 - Math.PI / 2;
-            const innerX = endCenterX + Math.cos(innerAngle) * innerRadius;
-            const innerY = endCenterY + Math.sin(innerAngle) * innerRadius;
-            
+            const innerX = endCenterX + Math.cos(innerAngle) * starInnerRadius;
+            const innerY = endCenterY + Math.sin(innerAngle) * starInnerRadius;
+
             if (i === 0) {
               ctx.moveTo(outerX, outerY);
             } else {
@@ -294,19 +304,22 @@ const IsometricGame = () => {
         }
       }
     }
-    
+
     ctx.restore(); // Restore clipping
   };
-  
-const drawBall = (ctx, x, y) => {
+
+  const drawBall = (ctx, x, y) => {
     // Set up clipping to ensure nothing draws outside canvas bounds
     ctx.save();
     ctx.beginPath();
     ctx.rect(0, 0, ctx.canvas.width, ctx.canvas.height);
     ctx.clip();
-    
+
+    const TILE_HEIGHT = tileDimensionsRef.current.height;
+    const ballRadius = Math.max(4, TILE_HEIGHT * 0.6);
+
     const iso = toIsometric(x, y);
-    
+
     // Use the same offset calculation as drawGrid to ensure alignment
     const corners = [
       toIsometric(0, 0),
@@ -314,70 +327,69 @@ const drawBall = (ctx, x, y) => {
       toIsometric(0, GRID_SIZE - 1),
       toIsometric(GRID_SIZE - 1, GRID_SIZE - 1)
     ];
-    
+
     const minX = Math.min(...corners.map(c => c.x));
     const maxX = Math.max(...corners.map(c => c.x));
     const minY = Math.min(...corners.map(c => c.y));
     const maxY = Math.max(...corners.map(c => c.y));
-    
+
     const gridWidth = maxX - minX;
     const gridHeight = maxY - minY;
-    
-    const viewport = getViewportSize();
-    const padding = 20; // Padding on all sides
+
+    // Use actual canvas dimensions
+    const canvasWidth = ctx.canvas.width;
+    const canvasHeight = ctx.canvas.height;
     const topSpace = 100; // Space for title
-    
-    // Calculate offset with padding, ensuring grid stays within bounds
-    const maxOffsetX = viewport.width - gridWidth - padding;
-    const maxOffsetY = viewport.height - gridHeight - padding;
-    const offsetX = Math.max(padding, Math.min(maxOffsetX, (viewport.width - gridWidth) / 2)) - minX;
-    const offsetY = Math.max(topSpace, Math.min(maxOffsetY, (viewport.height - gridHeight) / 2)) - minY;
-    
+
+    // Calculate offset to center grid (same as drawGrid)
+    const offsetX = (canvasWidth - gridWidth) / 2 - minX;
+    const offsetY = topSpace + (canvasHeight - topSpace - 180 - gridHeight) / 2 - minY;
+
     const centerX = offsetX + iso.x;
-    const centerY = offsetY + iso.y + 8;
-    
+    const centerY = offsetY + iso.y;
+
     // Skip drawing if ball is outside canvas bounds
-    if (centerX < -BALL_RADIUS || centerX > ctx.canvas.width + BALL_RADIUS ||
-        centerY < -BALL_RADIUS || centerY > ctx.canvas.height + BALL_RADIUS) {
+    if (centerX < -ballRadius || centerX > ctx.canvas.width + ballRadius ||
+      centerY < -ballRadius || centerY > ctx.canvas.height + ballRadius) {
       ctx.restore();
       return;
     }
-    
+
     // Ball shadow
     ctx.fillStyle = 'rgba(0, 255, 0, 0.2)';
     ctx.beginPath();
-    ctx.ellipse(centerX, centerY + 10, BALL_RADIUS * 0.8, BALL_RADIUS * 0.3, 0, 0, Math.PI * 2);
+    ctx.ellipse(centerX, centerY + ballRadius * 1.5, ballRadius * 0.8, ballRadius * 0.3, 0, 0, Math.PI * 2);
     ctx.fill();
-    
+
     // Main ball
     ctx.fillStyle = '#00ff00';
     ctx.beginPath();
-    ctx.arc(centerX, centerY, BALL_RADIUS, 0, Math.PI * 2);
+    ctx.arc(centerX, centerY, ballRadius, 0, Math.PI * 2);
     ctx.fill();
-    
+
     // Highlight
     ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
     ctx.beginPath();
-    ctx.ellipse(centerX - 1, centerY - 1, BALL_RADIUS * 0.3, BALL_RADIUS * 0.2, -Math.PI/4, 0, Math.PI * 2);
+    ctx.ellipse(centerX - 1, centerY - 1, ballRadius * 0.3, ballRadius * 0.2, -Math.PI / 4, 0, Math.PI * 2);
     ctx.fill();
-    
+
     ctx.restore(); // Restore clipping
   };
-  
+
   const canMoveTo = (x, y) => {
     if (x < 0 || x >= GRID_SIZE || y < 0 || y >= GRID_SIZE) return false;
     return gameMap[y]?.[x] !== 1;
   };
-  
+
   const moveBall = (dx, dy) => {
     if (gameState !== 'playing') return;
-    
+
     const newX = ballPos.x + dx;
     const newY = ballPos.y + dy;
-    
+
     if (canMoveTo(newX, newY)) {
       setBallPos({ x: newX, y: newY });
-      
+
       // Decrease score for each step
       setScore(prev => {
         const newScore = prev - 1;
@@ -387,22 +399,22 @@ const drawBall = (ctx, x, y) => {
         }
         return newScore;
       });
-      
+
       // Check for yellow trap tile
       if (gameMap[newY][newX] === 2) {
         setGameState('trapped');
       }
-      
+
       // Check for end point (win condition)
       if (newX === endPoint.x && newY === endPoint.y) {
         setGameState('won');
       }
     }
   };
-  
+
   React.useEffect(() => {
     const handleKeyPress = (e) => {
-      switch(e.key) {
+      switch (e.key) {
         case 'ArrowUp':
         case 'w':
           moveBall(0, -1);
@@ -419,27 +431,27 @@ const drawBall = (ctx, x, y) => {
         case 'd':
           moveBall(1, 0);
           break;
-case ' ':
-        resetGame();
-        break;
+        case ' ':
+          resetGame();
+          break;
       }
     };
-    
+
     window.addEventListener('keydown', handleKeyPress);
     return () => window.removeEventListener('keydown', handleKeyPress);
   }, [ballPos, gameState]);
-  
+
   // Game loop for enemies and bullets
   React.useEffect(() => {
     if (gameState !== 'playing') return;
-    
+
     const gameLoop = setInterval(() => {
       // Move enemies
       setEnemies(prev => {
         const newEnemies = prev.map(enemy => {
           const newEnemy = { ...enemy };
           newEnemy.moveTimer++;
-          
+
           // Move enemy every 15 frames (faster)
           if (newEnemy.moveTimer >= 15) {
             newEnemy.moveTimer = 0;
@@ -450,37 +462,37 @@ case ' ':
             const validMoves = directions.filter(dir => {
               const newX = newEnemy.x + dir.dx;
               const newY = newEnemy.y + dir.dy;
-              return newX >= 0 && newX < GRID_SIZE && 
-                     newY >= 0 && newY < GRID_SIZE && 
-                     gameMap[newY][newX] !== 1;
+              return newX >= 0 && newX < GRID_SIZE &&
+                newY >= 0 && newY < GRID_SIZE &&
+                gameMap[newY][newX] !== 1;
             });
-            
+
             if (validMoves.length > 0) {
               const move = validMoves[Math.floor(Math.random() * validMoves.length)];
               newEnemy.x += move.dx;
               newEnemy.y += move.dy;
-              
+
               // Check if enemy stepped on yellow trap
               if (gameMap[newEnemy.y][newEnemy.x] === 2) {
                 return null; // Enemy dies
               }
             }
           }
-          
+
           // Enemy shoots
           newEnemy.shootTimer--;
           if (newEnemy.shootTimer <= 0) {
             newEnemy.shootTimer = Math.floor(Math.random() * 60) + 60; // Slower shooting
-            
+
             // Calculate direction to ball
             const dx = ballPos.x - newEnemy.x;
             const dy = ballPos.y - newEnemy.y;
             const distance = Math.sqrt(dx * dx + dy * dy);
-            
-if (distance > 0 && distance < 8) { // Reduced shooting range
-            const bulletDx = (dx / distance) * 0.15; // Slower bullets
-            const bulletDy = (dy / distance) * 0.15;
-              
+
+            if (distance > 0 && distance < 8) { // Reduced shooting range
+              const bulletDx = (dx / distance) * 0.15; // Slower bullets
+              const bulletDy = (dy / distance) * 0.15;
+
               setBullets(prev => [...prev, {
                 x: newEnemy.x,
                 y: newEnemy.y,
@@ -489,10 +501,10 @@ if (distance > 0 && distance < 8) { // Reduced shooting range
               }]);
             }
           }
-          
+
           return newEnemy;
         }).filter(enemy => enemy !== null); // Remove dead enemies
-        
+
         // Spawn new enemy if one died
         if (newEnemies.length < prev.length) {
           let ex, ey;
@@ -500,7 +512,7 @@ if (distance > 0 && distance < 8) { // Reduced shooting range
             ex = Math.floor(Math.random() * GRID_SIZE);
             ey = Math.floor(Math.random() * GRID_SIZE);
           } while (gameMap[ey][ex] !== 0 || (Math.abs(ex - ballPos.x) < 3 && Math.abs(ey - ballPos.y) < 3));
-          
+
           newEnemies.push({
             x: ex,
             y: ey,
@@ -508,10 +520,10 @@ if (distance > 0 && distance < 8) { // Reduced shooting range
             shootTimer: Math.floor(Math.random() * 60) + 30
           });
         }
-        
+
         return newEnemies;
       });
-      
+
       // Move bullets
       setBullets(prev => {
         return prev.map(bullet => {
@@ -520,29 +532,29 @@ if (distance > 0 && distance < 8) { // Reduced shooting range
             x: bullet.x + bullet.dx,
             y: bullet.y + bullet.dy
           };
-          
+
           // Check if bullet hit ball
           const distance = Math.sqrt(
-            Math.pow(newBullet.x - ballPos.x, 2) + 
+            Math.pow(newBullet.x - ballPos.x, 2) +
             Math.pow(newBullet.y - ballPos.y, 2)
           );
-          
+
           if (distance < 0.5) {
             setGameState('shot');
             return null;
           }
-          
+
           // Remove bullet if out of bounds
-          if (newBullet.x < 0 || newBullet.x >= GRID_SIZE || 
-              newBullet.y < 0 || newBullet.y >= GRID_SIZE) {
+          if (newBullet.x < 0 || newBullet.x >= GRID_SIZE ||
+            newBullet.y < 0 || newBullet.y >= GRID_SIZE) {
             return null;
           }
-          
+
           return newBullet;
         }).filter(bullet => bullet !== null);
       });
     }, 25); // Run game loop every 25ms (faster gameplay)
-    
+
     return () => clearInterval(gameLoop);
   }, [gameState, ballPos, gameMap, GRID_SIZE]);
 
@@ -550,62 +562,65 @@ if (distance > 0 && distance < 8) { // Reduced shooting range
     const handleResize = () => {
       const canvas = canvasRef.current;
       if (!canvas) return;
-      
-      const viewport = getViewportSize();
-      // Ensure canvas doesn't exceed viewport
-      canvas.width = Math.min(viewport.width, window.innerWidth);
-      canvas.height = Math.min(viewport.height, window.innerHeight);
-      
+
+      // Use the actual displayed size of the canvas element
+      const rect = canvas.getBoundingClientRect();
+      canvas.width = rect.width;
+      canvas.height = rect.height;
+
+      // Calculate tile dimensions to fit the grid in the canvas
+      tileDimensionsRef.current = calculateTileDimensions(canvas.width, canvas.height);
+
       const ctx = canvas.getContext('2d');
       // Clear canvas
       ctx.fillStyle = '#000000';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
-      
+
       // Only draw if we have a valid game map
       if (gameMap.length > 0) {
         drawGrid(ctx);
         drawBall(ctx, ballPos.x, ballPos.y);
       }
     };
-    
+
     handleResize();
     window.addEventListener('resize', handleResize);
     window.addEventListener('orientationchange', handleResize);
-    
+
     // Handle mobile viewport changes
     const handleViewportChange = () => {
       setTimeout(handleResize, 100); // Delay to account for browser UI animations
     };
     window.addEventListener('resize', handleViewportChange);
-    
+
     return () => {
       window.removeEventListener('resize', handleResize);
       window.removeEventListener('orientationchange', handleResize);
       window.removeEventListener('resize', handleViewportChange);
     };
   }, [ballPos, gameMap, GRID_SIZE, endPoint, enemies, bullets]);
-  
+
   const resetGame = () => {
     setGameState('playing');
     setGameMap(generateRandomMap());
   };
-  
-return React.createElement(
+
+  return React.createElement(
     'div',
-    { 
+    {
       ref: canvasContainerRef,
-      style: { 
+      style: {
         position: 'fixed',
         top: 0,
         left: 0,
-        width: '100%', 
+        width: '100%',
         height: '100%',
         height: '-webkit-fill-available', // iOS Safari
         overflow: 'hidden',
         touchAction: 'none'
-      } 
+      }
     },
-      React.createElement(
+    React.createElement(
       'canvas',
       {
         ref: canvasRef,
@@ -614,10 +629,10 @@ return React.createElement(
           position: 'absolute',
           top: 0,
           left: 0,
+          right: 0,
+          bottom: 0,
           width: '100%',
           height: '100%',
-          maxWidth: '100vw',
-          maxHeight: '100vh',
           display: 'block',
           touchAction: 'none',
           overflow: 'hidden'
@@ -630,7 +645,7 @@ return React.createElement(
       {
         style: {
           position: 'fixed',
-          bottom: getViewportSize().width < 768 ? '40px' : '20px', // Leave space for score at bottom on mobile
+          bottom: getViewportSize().width < 768 ? '-10px' : '20px', // Leave space for score at bottom on mobile
           left: '50%',
           transform: 'translateX(-50%)',
           display: getViewportSize().width < 768 ? 'grid' : 'none', // Only show on mobile
@@ -736,7 +751,7 @@ return React.createElement(
       },
       `Score: ${score}/${maxSteps}`
     ),
-    
+
     // Game modal overlay
     (gameState !== 'playing') && React.createElement(
       'div',
@@ -754,7 +769,7 @@ return React.createElement(
           alignItems: 'center'
         }
       },
-React.createElement(
+      React.createElement(
         'div',
         {
           style: {
@@ -766,8 +781,8 @@ React.createElement(
             fontFamily: '"Courier New", monospace',
             fontSize: getViewportSize().width < 768 ? '2rem' : '3rem',
             fontWeight: 'bold',
-            height: '100vh',
-            width: '100vw',
+            height: '100%',
+            width: '100%',
             display: 'flex',
             flexDirection: 'column',
             justifyContent: 'center',
@@ -775,9 +790,11 @@ React.createElement(
             position: 'absolute',
             top: '0',
             left: '0',
+            right: '0',
+            bottom: '0',
             zIndex: 100
           }
-},
+        },
         // Game state title only on desktop
         (getViewportSize().width < 768) && React.createElement(
           'div',
@@ -789,17 +806,17 @@ React.createElement(
               textShadow: '0 0 10px rgba(0, 255, 0, 0.5)'
             }
           },
-          `${gameState === 'trapped' 
-            ? 'TRAPPED!' 
+          `${gameState === 'trapped'
+            ? 'TRAPPED!'
             : gameState === 'won'
-            ? 'YOU WON!'
-            : gameState === 'lost'
-            ? 'OUT OF STEPS!'
-            : gameState === 'shot'
-            ? 'SHOT!'
-            : 'GAME OVER'}`
+              ? 'YOU WON!'
+              : gameState === 'lost'
+                ? 'OUT OF STEPS!'
+                : gameState === 'shot'
+                  ? 'SHOT!'
+                  : 'GAME OVER'}`
         ),
-React.createElement(
+        React.createElement(
           'div',
           {
             style: {
@@ -836,14 +853,14 @@ React.createElement(
       )
     ),
 
-    
+
   );
 };
 
 const App = () => {
   return React.createElement(
     'div',
-    { 
+    {
       style: {
         position: 'fixed',
         top: 0,
@@ -856,7 +873,7 @@ const App = () => {
         touchAction: 'none'
       }
     },
-React.createElement(
+    React.createElement(
       'div',
       {
         style: {
@@ -893,8 +910,8 @@ React.createElement(
           lineHeight: '1.2'
         }
       },
-      getViewportSize().width < 768 
-        ? 'Reach YELLOW star! Avoid RED enemies!' 
+      getViewportSize().width < 768
+        ? 'Reach YELLOW star! Avoid RED enemies!'
         : 'Navigate to the YELLOW star! Avoid RED enemies! Use WASD or Arrow Keys'
     ),
 
