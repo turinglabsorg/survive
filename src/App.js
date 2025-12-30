@@ -16,8 +16,12 @@ const IsometricGame = () => {
   const [endPoint, setEndPoint] = React.useState({ x: 0, y: 0 });
   const [gameState, setGameState] = React.useState('playing');
   const [gameMap, setGameMap] = React.useState([]);
-  const [score, setScore] = React.useState(0);
-  const [maxSteps, setMaxSteps] = React.useState(0);
+  const [score, setScore] = React.useState(0); // Steps taken
+  const [stepsRemaining, setStepsRemaining] = React.useState(() => {
+    // Load from localStorage or default to 50000
+    const saved = localStorage.getItem('survive_steps_remaining');
+    return saved ? parseInt(saved, 10) : 50000;
+  });
   const [enemies, setEnemies] = React.useState([]);
   const [bullets, setBullets] = React.useState([]);
   const [joystickPos, setJoystickPos] = React.useState({ x: 0, y: 0 });
@@ -82,10 +86,6 @@ const IsometricGame = () => {
     } while (Math.abs(endX - startX) < Math.floor(GRID_SIZE / 3) ||
       Math.abs(endY - startY) < Math.floor(GRID_SIZE / 3));
 
-    // Calculate Manhattan distance for dynamic scoring
-    const manhattanDistance = Math.abs(endX - startX) + Math.abs(endY - startY);
-    const calculatedMaxSteps = (Math.ceil(manhattanDistance * 1.5) + 10) * 1000; // Buffer for detours, multiplied by 1000 for joystick
-
     // Clear start and end areas
     for (let dy = -1; dy <= 1; dy++) {
       for (let dx = -1; dx <= 1; dx++) {
@@ -105,8 +105,8 @@ const IsometricGame = () => {
       }
     }
 
-    // Generate enemies
-    const enemyCount = Math.min(4, Math.floor(GRID_SIZE / 8)); // Fewer enemies for mobile
+    // Generate enemies - random number between 2 to 5
+    const enemyCount = Math.floor(Math.random() * 4) + 2; // Random between 2-5
     const newEnemies = [];
     for (let i = 0; i < enemyCount; i++) {
       let ex, ey;
@@ -126,13 +126,23 @@ const IsometricGame = () => {
     // Set ball position, end point, score, and enemies
     setBallPos({ x: startX, y: startY });
     setEndPoint({ x: endX, y: endY });
-    setScore(calculatedMaxSteps);
-    setMaxSteps(calculatedMaxSteps);
+    // Reset score (steps taken) to 0, keep steps remaining from localStorage
+    setScore(0);
+    // Load steps remaining from localStorage (or use current if already loaded)
+    const saved = localStorage.getItem('survive_steps_remaining');
+    if (saved) {
+      setStepsRemaining(parseInt(saved, 10));
+    }
     setEnemies(newEnemies);
     setBullets([]);
 
     return map;
   };
+
+  // Save steps remaining to localStorage whenever it changes
+  React.useEffect(() => {
+    localStorage.setItem('survive_steps_remaining', stepsRemaining.toString());
+  }, [stepsRemaining]);
 
   React.useEffect(() => {
     setGameMap(generateRandomMap());
@@ -396,25 +406,34 @@ const IsometricGame = () => {
     if (canMoveTo(newX, newY)) {
       setBallPos({ x: newX, y: newY });
 
-      // Decrease score for each step
-      setScore(prev => {
-        const newScore = prev - 1;
-        if (newScore <= 0) {
+      // Increment steps taken (score)
+      setScore(prev => prev + 1);
+
+      // Decrease steps remaining
+      setStepsRemaining(prev => {
+        const newRemaining = prev - 1;
+        
+        // Check if out of steps
+        if (newRemaining <= 0) {
           setGameState('lost');
           return 0;
         }
-        return newScore;
+
+        // Check for yellow trap tile
+        if (gameMap[newY][newX] === 2) {
+          setGameState('trapped');
+          return newRemaining;
+        }
+
+        // Check for end point (win condition)
+        if (newX === endPoint.x && newY === endPoint.y) {
+          setGameState('won');
+          // Add 100 steps when you win
+          return newRemaining + 100;
+        }
+
+        return newRemaining;
       });
-
-      // Check for yellow trap tile
-      if (gameMap[newY][newX] === 2) {
-        setGameState('trapped');
-      }
-
-      // Check for end point (win condition)
-      if (newX === endPoint.x && newY === endPoint.y) {
-        setGameState('won');
-      }
     }
   };
 
@@ -918,7 +937,7 @@ const IsometricGame = () => {
           border: '1px solid #00ff00'
         }
       },
-      `Score: ${score}/${maxSteps}`
+      `Steps: ${score} | Remaining: ${stepsRemaining}`
     ),
 
     // Game modal overlay
@@ -1000,7 +1019,7 @@ const IsometricGame = () => {
             },
             onClick: resetGame
           },
-          `Final Score: ${score}/${maxSteps}`
+          `Steps Taken: ${score} | Steps Remaining: ${stepsRemaining}`
         ),
         React.createElement(
           'div',
