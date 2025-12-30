@@ -336,7 +336,93 @@ const DarkMusicGenerator = () => {
     kickOsc.stop(now + 0.25);
   };
 
-  return { startMusic, stopMusic, playStepSound, playLoseSound, playWinSound, playDrumKick };
+  // Play drum splash sound when player gets shot
+  const playDrumSplash = () => {
+    if (!audioContextRef.current) {
+      initAudio();
+    }
+    
+    if (audioContextRef.current.state === 'suspended') {
+      audioContextRef.current.resume();
+    }
+    
+    const now = audioContextRef.current.currentTime;
+    
+    // Create a splash/cymbal-like sound with noise and high frequencies
+    // Use multiple oscillators for a rich splash sound
+    const frequencies = [800, 1200, 1600, 2000];
+    
+    frequencies.forEach((freq, index) => {
+      const splashOsc = audioContextRef.current.createOscillator();
+      const splashGain = audioContextRef.current.createGain();
+      
+      splashOsc.type = 'sine';
+      splashOsc.frequency.setValueAtTime(freq, now);
+      splashOsc.frequency.exponentialRampToValueAtTime(freq * 0.3, now + 0.3);
+      
+      // Quick attack, longer decay with reverb-like tail
+      const delay = index * 0.01; // Slight stagger for richness
+      splashGain.gain.setValueAtTime(0, now + delay);
+      splashGain.gain.linearRampToValueAtTime(0.3, now + delay + 0.01);
+      splashGain.gain.exponentialRampToValueAtTime(0.1, now + delay + 0.1);
+      splashGain.gain.exponentialRampToValueAtTime(0.01, now + delay + 0.5);
+      
+      splashOsc.connect(splashGain);
+      // Route through reverb for splash effect
+      splashGain.connect(reverbConvolverRef.current);
+      
+      splashOsc.start(now + delay);
+      splashOsc.stop(now + delay + 0.5);
+    });
+  };
+
+  // Play gong sound when player gets trapped
+  const playGong = () => {
+    if (!audioContextRef.current) {
+      initAudio();
+    }
+    
+    if (audioContextRef.current.state === 'suspended') {
+      audioContextRef.current.resume();
+    }
+    
+    const now = audioContextRef.current.currentTime;
+    
+    // Create a gong sound with multiple harmonics for metallic character
+    // Gong frequencies: fundamental and harmonics
+    const gongFrequencies = [
+      { freq: 200, volume: 0.6 },   // Fundamental
+      { freq: 400, volume: 0.4 },   // 2nd harmonic
+      { freq: 600, volume: 0.3 },   // 3rd harmonic
+      { freq: 800, volume: 0.2 }   // 4th harmonic
+    ];
+    
+    gongFrequencies.forEach(({ freq, volume }, index) => {
+      const gongOsc = audioContextRef.current.createOscillator();
+      const gongGain = audioContextRef.current.createGain();
+      
+      gongOsc.type = 'sine';
+      gongOsc.frequency.setValueAtTime(freq, now);
+      // Slight frequency modulation for metallic character
+      gongOsc.frequency.exponentialRampToValueAtTime(freq * 0.95, now + 2);
+      
+      // Slow attack, very long decay (gong characteristic)
+      const delay = index * 0.05; // Slight stagger
+      gongGain.gain.setValueAtTime(0, now + delay);
+      gongGain.gain.linearRampToValueAtTime(volume, now + delay + 0.1); // Slow attack
+      gongGain.gain.exponentialRampToValueAtTime(volume * 0.5, now + delay + 0.5);
+      gongGain.gain.exponentialRampToValueAtTime(0.01, now + delay + 3); // Long decay
+      
+      gongOsc.connect(gongGain);
+      // Route through reverb for gong's characteristic resonance
+      gongGain.connect(reverbConvolverRef.current);
+      
+      gongOsc.start(now + delay);
+      gongOsc.stop(now + delay + 3);
+    });
+  };
+
+  return { startMusic, stopMusic, playStepSound, playLoseSound, playWinSound, playDrumKick, playDrumSplash, playGong };
 };
 
 const IsometricGame = () => {
@@ -349,11 +435,10 @@ const IsometricGame = () => {
   const [endPoint, setEndPoint] = React.useState({ x: 0, y: 0 });
   const [gameState, setGameState] = React.useState('playing');
   const [gameMap, setGameMap] = React.useState([]);
-  const [score, setScore] = React.useState(0); // Steps taken
-  const [stepsRemaining, setStepsRemaining] = React.useState(() => {
-    // Load from localStorage or default to 50000
-    const saved = localStorage.getItem('survive_steps_remaining');
-    return saved ? parseInt(saved, 10) : 50000;
+  const [score, setScore] = React.useState(() => {
+    // Load steps done from localStorage
+    const saved = localStorage.getItem('survive_steps_done');
+    return saved ? parseInt(saved, 10) : 0;
   });
   const [enemies, setEnemies] = React.useState([]);
   const [bullets, setBullets] = React.useState([]);
@@ -468,23 +553,17 @@ const IsometricGame = () => {
     // Set ball position, end point, score, and enemies
     setBallPos({ x: startX, y: startY });
     setEndPoint({ x: endX, y: endY });
-    // Reset score (steps taken) to 0, keep steps remaining from localStorage
-    setScore(0);
-    // Load steps remaining from localStorage (or use current if already loaded)
-    const saved = localStorage.getItem('survive_steps_remaining');
-    if (saved) {
-      setStepsRemaining(parseInt(saved, 10));
-    }
+    // Don't reset score - keep accumulating steps done
     setEnemies(newEnemies);
     setBullets([]);
 
     return map;
   };
 
-  // Save steps remaining to localStorage whenever it changes
+  // Save steps done to localStorage whenever score changes
   React.useEffect(() => {
-    localStorage.setItem('survive_steps_remaining', stepsRemaining.toString());
-  }, [stepsRemaining]);
+    localStorage.setItem('survive_steps_done', score.toString());
+  }, [score]);
 
   React.useEffect(() => {
     setGameMap(generateRandomMap());
@@ -777,35 +856,19 @@ const IsometricGame = () => {
       // Increment steps taken (score)
       setScore(prev => prev + 1);
 
-      // Decrease steps remaining
-      setStepsRemaining(prev => {
-        const newRemaining = prev - 1;
-        
-        // Check if out of steps
-        if (newRemaining <= 0) {
-          setGameState('lost');
-          // Play lose sound - very dark and long note
-          musicGenerator.playLoseSound();
-          return 0;
-        }
+      // Check for yellow trap tile
+      if (gameMap[newY][newX] === 2) {
+        setGameState('trapped');
+        // Play gong sound when player gets trapped
+        musicGenerator.playGong();
+      }
 
-        // Check for yellow trap tile
-        if (gameMap[newY][newX] === 2) {
-          setGameState('trapped');
-          return newRemaining;
-        }
-
-        // Check for end point (win condition)
-        if (newX === endPoint.x && newY === endPoint.y) {
-          setGameState('won');
-          // Play win sound - high note with reverb
-          musicGenerator.playWinSound();
-          // Add 100 steps when you win
-          return newRemaining + 100;
-        }
-
-        return newRemaining;
-      });
+      // Check for end point (win condition)
+      if (newX === endPoint.x && newY === endPoint.y) {
+        setGameState('won');
+        // Play win sound - high note with reverb
+        musicGenerator.playWinSound();
+      }
     }
   };
 
@@ -971,6 +1034,10 @@ const IsometricGame = () => {
 
           if (distance < 0.5) {
             setGameState('shot');
+            // Play drum splash when player gets shot
+            if (musicGeneratorRef.current && musicGeneratorRef.current.playDrumSplash) {
+              musicGeneratorRef.current.playDrumSplash();
+            }
             return null;
           }
 
@@ -1031,11 +1098,6 @@ const IsometricGame = () => {
   }, [ballPos, gameMap, GRID_SIZE, endPoint, enemies, bullets]);
 
   const resetGame = () => {
-    // Penalty: lose 5000 steps when skipping with space
-    setStepsRemaining(prev => {
-      const newSteps = Math.max(0, prev - 5000);
-      return newSteps;
-    });
     setGameState('playing');
     setGameMap(generateRandomMap());
   };
@@ -1319,7 +1381,7 @@ const IsometricGame = () => {
           border: '1px solid #00ff00'
         }
       },
-      `Steps: ${score} | Remaining: ${stepsRemaining}`
+      `Steps Done: ${score}`
     ),
 
     // Game modal overlay
@@ -1401,7 +1463,7 @@ const IsometricGame = () => {
             },
             onClick: resetGame
           },
-          `Steps Taken: ${score} | Steps Remaining: ${stepsRemaining}`
+          `Steps Done: ${score}`
         ),
         React.createElement(
           'div',
