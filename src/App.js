@@ -16,8 +16,10 @@ const DarkMusicGenerator = () => {
   const isPlayingRef = React.useRef(false);
   const intervalRef = React.useRef(null);
 
-  // Dark minor scale notes (in MIDI note numbers, lower octaves for darkness)
-  const darkScale = [36, 39, 41, 43, 46, 48, 51, 53]; // C, Eb, F, G, Bb, C, Eb, F (minor pentatonic +)
+  // Minor pentatonic scale notes (in MIDI note numbers, lower octaves for darkness)
+  // C minor pentatonic: C, Eb, F, G, Bb (repeated across octaves)
+  const pentatonicScale = [36, 39, 41, 43, 46, 48, 51, 53, 55, 58, 60, 63, 65, 67, 70]; // Multiple octaves of pentatonic
+  const darkScale = pentatonicScale; // Keep for backward compatibility
   const darkChords = [
     [36, 39, 43], // Cm
     [39, 43, 46], // Ebm
@@ -209,25 +211,28 @@ const DarkMusicGenerator = () => {
     intervalRef.current = { chordInterval, melodyInterval };
   };
 
-  // Play a step sound based on tile position (random but consistent per tile)
-  const playStepSound = (tileX, tileY) => {
+  // Play a step sound based on tile position using the tile-to-note mapping
+  const playStepSound = (tileX, tileY, noteMap = []) => {
     resumeAudioContext();
     
-    // Create a deterministic but random note based on tile position
-    // This ensures each tile always plays the same note
+    // Get the note assigned to this tile from the mapping
+    // Each tile has a unique note that changes with each new game
+    let stepNote;
+    if (noteMap.length > 0 && 
+        tileY >= 0 && tileY < noteMap.length &&
+        tileX >= 0 && tileX < noteMap[tileY].length) {
+      stepNote = noteMap[tileY][tileX];
+    } else {
+      // Fallback to a default note if mapping not ready
+      stepNote = 48; // Middle C
+    }
+    
+    // Create a deterministic pseudo-random for this tile for consistent timing/volume
     const seed = (tileX * 1000 + tileY) % 1000;
     const pseudoRandom = () => {
       let value = Math.sin(seed) * 10000;
       return value - Math.floor(value);
     };
-    
-    // Get a random note from the dark scale based on tile position
-    const noteIndex = Math.floor(pseudoRandom() * darkScale.length);
-    const baseNote = darkScale[noteIndex];
-    
-    // Vary the octave slightly based on position (adds variety)
-    const octaveOffset = Math.floor(pseudoRandom() * 3) - 1; // -1, 0, or +1 octave
-    const stepNote = baseNote + (octaveOffset * 12);
     
     // Play a short, percussive note for the step
     const duration = 0.2 + pseudoRandom() * 0.15; // Short, snappy
@@ -437,6 +442,8 @@ const IsometricGame = () => {
     const saved = localStorage.getItem('survive_sound_enabled');
     return saved !== null ? saved === 'true' : true;
   });
+  // Tile-to-note mapping: each tile gets a unique note from pentatonic scale (per game)
+  const [tileNoteMap, setTileNoteMap] = React.useState([]);
   
   // Music generator
   const musicGenerator = DarkMusicGenerator();
@@ -560,12 +567,44 @@ const IsometricGame = () => {
       });
     }
 
+    // Generate unique tile-to-note mapping for this game
+    // Each tile gets a unique note from the pentatonic scale
+    const noteMap = [];
+    const pentatonicNotes = [36, 39, 41, 43, 46, 48, 51, 53, 55, 58, 60, 63, 65, 67, 70, 72, 75, 77, 79, 82];
+    
+    // Create a shuffled array of notes to ensure variety
+    const shuffledNotes = [...pentatonicNotes];
+    for (let i = shuffledNotes.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [shuffledNotes[i], shuffledNotes[j]] = [shuffledNotes[j], shuffledNotes[i]];
+    }
+    
+    // Generate a random starting octave offset for this game
+    const gameOctaveOffset = Math.floor(Math.random() * 3) * 12; // 0, 12, or 24 semitones
+    
+    for (let y = 0; y < GRID_SIZE; y++) {
+      const row = [];
+      for (let x = 0; x < GRID_SIZE; x++) {
+        // Use position-based index with some randomness for variety
+        const positionIndex = (x * GRID_SIZE + y) % shuffledNotes.length;
+        const baseNote = shuffledNotes[positionIndex];
+        
+        // Add slight octave variation per tile (0-1 octave up)
+        const tileOctaveVariation = Math.floor((Math.sin(x * 7 + y * 11) * 10000) % 2) * 12;
+        const finalNote = baseNote + gameOctaveOffset + tileOctaveVariation;
+        
+        row.push(finalNote);
+      }
+      noteMap.push(row);
+    }
+
     // Set ball position, end point, score, and enemies
     setBallPos({ x: startX, y: startY });
     setEndPoint({ x: endX, y: endY });
     // Don't reset score - keep accumulating steps done
     setEnemies(newEnemies);
     setBullets([]);
+    setTileNoteMap(noteMap); // Set the tile-to-note mapping for this game
 
     return map;
   };
@@ -861,7 +900,7 @@ const IsometricGame = () => {
       setBallPos({ x: newX, y: newY });
 
       // Play step sound based on tile position
-      musicGenerator.playStepSound(newX, newY);
+      musicGenerator.playStepSound(newX, newY, tileNoteMap);
 
       // Increment steps taken (score)
       setScore(prev => prev + 1);
