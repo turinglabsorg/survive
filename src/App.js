@@ -238,8 +238,8 @@ const DarkMusicGenerator = () => {
     const duration = 0.2 + pseudoRandom() * 0.15; // Short, snappy
     const volume = 0.25 + pseudoRandom() * 0.15; // Noticeable but not overwhelming
     
-    // Random delay between 500ms and 1s (0.5 to 1.0 seconds)
-    const delay = 0.5 + Math.random() * 0.5;
+    // Delay for step sounds - 1.0 to 1.5 seconds for more noticeable delay
+    const delay = 1.0 + Math.random() * 0.5;
     
     // Sometimes add the harmonized upper note with effects
     if (pseudoRandom() > 0.5) {
