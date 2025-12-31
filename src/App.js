@@ -477,6 +477,8 @@ const IsometricGame = () => {
   const joystickHandleRef = React.useRef(null);
   const [ballPos, setBallPos] = React.useState({ x: 0, y: 0 });
   const ballPosRef = React.useRef({ x: 0, y: 0 });
+  // Track last tile position for step sound and score tracking
+  const lastTileRef = React.useRef({ x: -1, y: -1 });
   
   // Keep ballPosRef in sync with ballPos
   React.useEffect(() => {
@@ -502,6 +504,12 @@ const IsometricGame = () => {
   // Keep gameStateRef in sync with gameState
   React.useEffect(() => {
     gameStateRef.current = gameState;
+    // Reset movement directions when game state changes
+    if (gameState !== 'playing') {
+      keyboardDirectionRef.current = { x: 0, y: 0 };
+      joystickDirectionRef.current = { x: 0, y: 0 };
+      keysPressedRef.current.clear();
+    }
   }, [gameState]);
   
   const [soundEnabled, setSoundEnabled] = React.useState(() => {
@@ -541,7 +549,7 @@ const IsometricGame = () => {
 
   // Random grid size between 24 and 50 - tile dimensions will scale to fit
   const [GRID_SIZE] = React.useState(() => Math.floor(Math.random() * (20 - 10 + 1)) + 10);
-  const MOVE_INTERVAL_MS = 250; // Fixed movement speed
+  const MOVE_SPEED = 0.15; // Movement speed in tiles per frame (smooth continuous movement)
 
   // Calculate tile dimensions dynamically to fit viewport
   const calculateTileDimensions = (canvasWidth, canvasHeight) => {
@@ -666,7 +674,11 @@ const IsometricGame = () => {
     }
 
     // Set ball position, end point, score, and enemies
-    setBallPos({ x: startX, y: startY });
+    // Set ball position, end point, score, and enemies
+    const startPos = { x: startX, y: startY };
+    setBallPos(startPos);
+    ballPosRef.current = startPos;
+    lastTileRef.current = { x: startX, y: startY }; // Initialize last tile
     setEndPoint({ x: endX, y: endY });
     // Don't reset score - keep accumulating steps done
     setEnemies(newEnemies);
@@ -965,94 +977,252 @@ const IsometricGame = () => {
     return gameMap[y]?.[x] !== 1;
   };
 
-  const moveBall = (dx, dy) => {
-    if (gameStateRef.current !== 'playing') return;
+  // Check and handle tile interactions when crossing into a new tile
+  const checkTileInteractions = React.useCallback((newX, newY) => {
+    const currentTileX = Math.floor(newX);
+    const currentTileY = Math.floor(newY);
+    const lastTile = lastTileRef.current;
 
-    // Use ref to get current position (always up-to-date)
-    const currentPos = ballPosRef.current;
-    const newX = currentPos.x + dx;
-    const newY = currentPos.y + dy;
-
-    if (canMoveTo(newX, newY)) {
-      const newPos = { x: newX, y: newY };
-      setBallPos(newPos);
-      ballPosRef.current = newPos; // Update ref immediately for next move
-
+    // If we've moved to a new tile, trigger tile-based events
+    if (currentTileX !== lastTile.x || currentTileY !== lastTile.y) {
       // Play step sound based on tile position
-      musicGenerator.playStepSound(newX, newY, tileNoteMap);
+      if (musicGenerator && musicGenerator.playStepSound) {
+        musicGenerator.playStepSound(currentTileX, currentTileY, tileNoteMap);
+      }
 
-      // Increment steps taken (score)
+      // Increment steps taken (score) - use functional update to batch
       setScore(prev => prev + 1);
 
       // Check for yellow trap tile
-      if (gameMap[newY][newX] === 2) {
+      if (gameMap && gameMap[currentTileY] && gameMap[currentTileY][currentTileX] === 2) {
         setGameState('trapped');
         // Apply penalty: subtract 30 steps
         applyPenalty();
         // Play gong sound when player gets trapped
-        musicGenerator.playGong();
+        if (musicGenerator && musicGenerator.playGong) {
+          musicGenerator.playGong();
+        }
+        return; // Stop movement when trapped
       }
 
       // Check for end point (win condition)
-      if (newX === endPoint.x && newY === endPoint.y) {
+      if (endPoint && currentTileX === endPoint.x && currentTileY === endPoint.y) {
         setGameState('won');
         // Play win sound - high note with reverb
-        musicGenerator.playWinSound();
+        if (musicGenerator && musicGenerator.playWinSound) {
+          musicGenerator.playWinSound();
+        }
+        return; // Stop movement when won
       }
+
+      // Update last tile position
+      lastTileRef.current = { x: currentTileX, y: currentTileY };
     }
-  };
+  }, [gameMap, endPoint, musicGenerator, tileNoteMap]);
+
+  // Keyboard direction state for smooth movement
+  const keyboardDirectionRef = React.useRef({ x: 0, y: 0 });
+  const keysPressedRef = React.useRef(new Set());
 
   React.useEffect(() => {
-    const handleKeyPress = (e) => {
-      switch (e.key.toLowerCase()) {
-        // Screen up -> isometric up-left
-        case 'arrowup':
-        case 'w':
-          moveBall(-1, -1);
-          break;
-        // Screen down -> isometric down-right
-        case 'arrowdown':
-        case 's':
-          moveBall(1, 1);
-          break;
-        // Screen left -> isometric left (horizontal)
-        case 'arrowleft':
-        case 'a':
-          moveBall(-1, 1);
-          break;
-        // Screen right -> isometric right (horizontal)
-        case 'arrowright':
-        case 'd':
-          moveBall(1, -1);
-          break;
-        // Diagonals (relative to screen)
-        case 'q': // up-left
-          moveBall(-1, 0);
-          break;
-        case 'e': // up-right
-          moveBall(0, -1);
-          break;
-        case 'z': // down-left
-          moveBall(0, 1);
-          break;
-        case 'c': // down-right
-          moveBall(1, 0);
-          break;
-        case ' ':
+    const handleKeyDown = (e) => {
+      if (gameState !== 'playing') {
+        if (e.key === ' ') {
           resetGame();
-          break;
+        }
+        return;
       }
+
+      const key = e.key.toLowerCase();
+      
+      // Handle space key separately
+      if (key === ' ') {
+        resetGame();
+        return;
+      }
+      
+      keysPressedRef.current.add(key);
+
+      // Recalculate direction based on all currently pressed keys
+      // This allows multiple keys to be pressed simultaneously
+      let dx = 0;
+      let dy = 0;
+
+      // Check vertical movement (up/down)
+      if (keysPressedRef.current.has('w') || keysPressedRef.current.has('arrowup')) {
+        dx -= 1;
+        dy -= 1;
+      }
+      if (keysPressedRef.current.has('s') || keysPressedRef.current.has('arrowdown')) {
+        dx += 1;
+        dy += 1;
+      }
+      
+      // Check horizontal movement (left/right)
+      if (keysPressedRef.current.has('a') || keysPressedRef.current.has('arrowleft')) {
+        dx -= 1;
+        dy += 1;
+      }
+      if (keysPressedRef.current.has('d') || keysPressedRef.current.has('arrowright')) {
+        dx += 1;
+        dy -= 1;
+      }
+      
+      // Check diagonal keys
+      if (keysPressedRef.current.has('q')) {
+        dx -= 1;
+        // dy stays 0
+      }
+      if (keysPressedRef.current.has('e')) {
+        // dx stays 0
+        dy -= 1;
+      }
+      if (keysPressedRef.current.has('z')) {
+        // dx stays 0
+        dy += 1;
+      }
+      if (keysPressedRef.current.has('c')) {
+        dx += 1;
+        // dy stays 0
+      }
+
+      // Normalize to prevent double speed on diagonals (clamp to -1, 0, or 1)
+      keyboardDirectionRef.current = { 
+        x: Math.max(-1, Math.min(1, dx)), 
+        y: Math.max(-1, Math.min(1, dy)) 
+      };
     };
 
-    window.addEventListener('keydown', handleKeyPress);
-    return () => window.removeEventListener('keydown', handleKeyPress);
-  }, [ballPos, gameState]);
+    const handleKeyUp = (e) => {
+      const key = e.key.toLowerCase();
+      keysPressedRef.current.delete(key);
 
-  // Game loop for enemies and bullets
+      // Recalculate direction based on remaining pressed keys
+      // Handle multiple keys for diagonal movement
+      let dx = 0;
+      let dy = 0;
+
+      // Check vertical movement (up/down)
+      if (keysPressedRef.current.has('w') || keysPressedRef.current.has('arrowup')) {
+        dx -= 1;
+        dy -= 1;
+      }
+      if (keysPressedRef.current.has('s') || keysPressedRef.current.has('arrowdown')) {
+        dx += 1;
+        dy += 1;
+      }
+      
+      // Check horizontal movement (left/right)
+      if (keysPressedRef.current.has('a') || keysPressedRef.current.has('arrowleft')) {
+        dx -= 1;
+        dy += 1;
+      }
+      if (keysPressedRef.current.has('d') || keysPressedRef.current.has('arrowright')) {
+        dx += 1;
+        dy -= 1;
+      }
+      
+      // Check diagonal keys
+      if (keysPressedRef.current.has('q')) {
+        dx -= 1;
+        // dy stays 0
+      }
+      if (keysPressedRef.current.has('e')) {
+        // dx stays 0
+        dy -= 1;
+      }
+      if (keysPressedRef.current.has('z')) {
+        // dx stays 0
+        dy += 1;
+      }
+      if (keysPressedRef.current.has('c')) {
+        dx += 1;
+        // dy stays 0
+      }
+
+      // Normalize to prevent double speed on diagonals (clamp to -1, 0, or 1)
+      keyboardDirectionRef.current = { 
+        x: Math.max(-1, Math.min(1, dx)), 
+        y: Math.max(-1, Math.min(1, dy)) 
+      };
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+    };
+  }, [gameState]);
+
+  // Smooth keyboard movement effect - always running to prevent freezing
+  React.useEffect(() => {
+    let animationFrameId;
+    let isActive = true;
+    let lastTime = performance.now();
+    let lastStateUpdateTime = 0;
+    const STATE_UPDATE_INTERVAL = 16; // Update state at ~60fps for fluid movement
+
+    const animate = (currentTime) => {
+      if (!isActive) return;
+
+      // Use ref to check game state (avoids stale closures)
+      if (gameStateRef.current !== 'playing') {
+        animationFrameId = requestAnimationFrame(animate);
+        return;
+      }
+
+      const deltaTime = currentTime - lastTime;
+      lastTime = currentTime;
+
+      const currentDir = keyboardDirectionRef.current;
+
+      if (currentDir.x !== 0 || currentDir.y !== 0) {
+        const currentPos = ballPosRef.current;
+        const normalizedSpeed = MOVE_SPEED * (deltaTime / 16.67);
+        const newX = currentPos.x + (currentDir.x * normalizedSpeed);
+        const newY = currentPos.y + (currentDir.y * normalizedSpeed);
+        const targetTileX = Math.floor(newX);
+        const targetTileY = Math.floor(newY);
+
+        if (canMoveTo(targetTileX, targetTileY)) {
+          if (newX >= 0 && newX < GRID_SIZE && newY >= 0 && newY < GRID_SIZE) {
+            ballPosRef.current = { x: newX, y: newY };
+
+            // Check for tile interactions
+            checkTileInteractions(newX, newY);
+
+            // Update state more frequently for smoother visuals
+            if (currentTime - lastStateUpdateTime >= STATE_UPDATE_INTERVAL) {
+              setBallPos({ x: newX, y: newY });
+              lastStateUpdateTime = currentTime;
+            }
+          }
+        }
+      }
+
+      animationFrameId = requestAnimationFrame(animate);
+    };
+
+    animationFrameId = requestAnimationFrame(animate);
+
+    return () => {
+      isActive = false;
+      if (animationFrameId) {
+        cancelAnimationFrame(animationFrameId);
+      }
+    };
+  }, [checkTileInteractions]); // Only depend on checkTileInteractions
+
+  // Game loop for enemies and bullets - uses refs to avoid blocking
   React.useEffect(() => {
     if (gameState !== 'playing') return;
 
     const gameLoop = setInterval(() => {
+      // Use refs to get current values without causing re-renders
+      const currentBallPos = ballPosRef.current;
+      const currentGameMap = gameMap;
+
       // Move enemies
       setEnemies(prev => {
         const newEnemies = prev.map(enemy => {
@@ -1071,7 +1241,7 @@ const IsometricGame = () => {
               const newY = newEnemy.y + dir.dy;
               return newX >= 0 && newX < GRID_SIZE &&
                 newY >= 0 && newY < GRID_SIZE &&
-                gameMap[newY][newX] !== 1;
+                currentGameMap[newY] && currentGameMap[newY][newX] !== 1;
             });
 
             if (validMoves.length > 0) {
@@ -1080,7 +1250,7 @@ const IsometricGame = () => {
               newEnemy.y += move.dy;
 
               // Check if enemy stepped on yellow trap
-              if (gameMap[newEnemy.y][newEnemy.x] === 2) {
+              if (currentGameMap[newEnemy.y] && currentGameMap[newEnemy.y][newEnemy.x] === 2) {
                 return null; // Enemy dies
               }
             }
@@ -1091,9 +1261,9 @@ const IsometricGame = () => {
           if (newEnemy.shootTimer <= 0) {
             newEnemy.shootTimer = Math.floor(Math.random() * 60) + 60; // Slower shooting
 
-            // Calculate direction to ball
-            const dx = ballPos.x - newEnemy.x;
-            const dy = ballPos.y - newEnemy.y;
+            // Calculate direction to ball using ref
+            const dx = currentBallPos.x - newEnemy.x;
+            const dy = currentBallPos.y - newEnemy.y;
             const distance = Math.sqrt(dx * dx + dy * dy);
 
             if (distance > 0 && distance < 8) { // Reduced shooting range
@@ -1123,7 +1293,7 @@ const IsometricGame = () => {
           do {
             ex = Math.floor(Math.random() * GRID_SIZE);
             ey = Math.floor(Math.random() * GRID_SIZE);
-          } while (gameMap[ey][ex] !== 0 || (Math.abs(ex - ballPos.x) < 3 && Math.abs(ey - ballPos.y) < 3));
+          } while (currentGameMap[ey] && (currentGameMap[ey][ex] !== 0 || (Math.abs(ex - currentBallPos.x) < 3 && Math.abs(ey - currentBallPos.y) < 3)));
 
           newEnemies.push({
             x: ex,
@@ -1151,15 +1321,15 @@ const IsometricGame = () => {
           if (
             tileX < 0 || tileX >= GRID_SIZE ||
             tileY < 0 || tileY >= GRID_SIZE ||
-            gameMap?.[tileY]?.[tileX] === 1 // wall tile
+            (currentGameMap[tileY] && currentGameMap[tileY][tileX] === 1) // wall tile
           ) {
             return null;
           }
 
-          // Check if bullet hit ball
+          // Check if bullet hit ball using ref
           const distance = Math.sqrt(
-            Math.pow(newBullet.x - ballPos.x, 2) +
-            Math.pow(newBullet.y - ballPos.y, 2)
+            Math.pow(newBullet.x - currentBallPos.x, 2) +
+            Math.pow(newBullet.y - currentBallPos.y, 2)
           );
 
           if (distance < 0.5) {
@@ -1185,7 +1355,7 @@ const IsometricGame = () => {
     }, 25); // Run game loop every 25ms (faster gameplay)
 
     return () => clearInterval(gameLoop);
-  }, [gameState, ballPos, gameMap, GRID_SIZE]);
+  }, [gameState, gameMap, GRID_SIZE]); // Removed ballPos dependency - use ref instead
 
   React.useEffect(() => {
     const handleResize = () => {
@@ -1267,108 +1437,113 @@ const IsometricGame = () => {
 
     setJoystickPos({ x: newX, y: newY });
 
-    // Calculate movement direction (8 directions) - use actual distance, not clamped
-    // This ensures direction is maintained even when joystick is at/past boundary
-    let moveX = 0;
-    let moveY = 0;
-
+    // Calculate continuous 360-degree movement direction using natural screen directions
     // Use actual distance to calculate direction (not clamped)
-    // This way, even when at boundary, direction is maintained
     if (distance > maxDistance * 0.2) { // Dead zone threshold
-      const normalizedX = Math.cos(angle);
-      const normalizedY = Math.sin(angle);
+      // Get normalized direction vector from joystick angle (natural screen space)
+      // angle is in radians: 0 = right, π/2 = down, π = left, -π/2 = up
+      const screenX = Math.cos(angle);  // -1 to 1 (left to right: -1 = left, 1 = right)
+      const screenY = Math.sin(angle);  // -1 to 1 (up to down: -1 = up, 1 = down)
 
-      // Determine 8-direction movement in screen space, then map to isometric grid
-      const absX = Math.abs(normalizedX);
-      const absY = Math.abs(normalizedY);
-
-      let screenX = 0;
-      let screenY = 0;
-
-      if (absX > absY) {
-        screenX = normalizedX > 0 ? 1 : -1;
-        if (absY > 0.5) {
-          screenY = normalizedY > 0 ? 1 : -1;
-        }
+      // Convert to isometric coordinates using EXACT same logic as keyboard
+      // Keyboard mapping:
+      // W/Up: dx = -1, dy = -1
+      // S/Down: dx = 1, dy = 1
+      // A/Left: dx = -1, dy = 1
+      // D/Right: dx = 1, dy = -1
+      // Formula that matches keyboard (flip screenX in the formula):
+      const isoX = screenY + screenX;  // Up: -1+0=-1, Down: 1+0=1, Left: 0+(-1)=-1, Right: 0+1=1
+      const isoY = screenY - screenX;  // Up: -1-0=-1, Down: 1-0=1, Left: 0-(-1)=1, Right: 0-1=-1
+      
+      // Normalize to maintain consistent speed in all directions
+      const isoLength = Math.sqrt(isoX * isoX + isoY * isoY);
+      if (isoLength > 0) {
+        joystickDirectionRef.current = { 
+          x: isoX / isoLength, 
+          y: isoY / isoLength 
+        };
       } else {
-        screenY = normalizedY > 0 ? 1 : -1;
-        if (absX > 0.5) {
-          screenX = normalizedX > 0 ? 1 : -1;
-        }
+        joystickDirectionRef.current = { x: 0, y: 0 };
       }
-
-      // Map screen directions to isometric grid deltas
-      const mapScreenToIso = (sx, sy) => {
-        // Screen up/down/left/right and diagonals mapped to iso grid (x,y)
-        if (sx === 0 && sy === -1) return { x: -1, y: -1 }; // up
-        if (sx === 0 && sy === 1) return { x: 1, y: 1 };   // down
-        if (sx === -1 && sy === 0) return { x: -1, y: 1 }; // left
-        if (sx === 1 && sy === 0) return { x: 1, y: -1 };  // right
-        if (sx === 1 && sy === -1) return { x: 0, y: -1 }; // up-right
-        if (sx === -1 && sy === -1) return { x: -1, y: 0 }; // up-left
-        if (sx === 1 && sy === 1) return { x: 1, y: 0 };   // down-right
-        if (sx === -1 && sy === 1) return { x: 0, y: 1 };  // down-left
-        return { x: 0, y: 0 };
-      };
-
-      const isoDir = mapScreenToIso(screenX, screenY);
-      moveX = isoDir.x;
-      moveY = isoDir.y;
-
-      // IMPORTANT: Always update direction when outside dead zone
-      // This ensures direction persists even when at boundary
-      // The interval will pick this up and keep moving
-      joystickDirectionRef.current = { x: moveX, y: moveY };
     } else {
       // Only reset direction when in dead zone
       joystickDirectionRef.current = { x: 0, y: 0 };
     }
   };
 
-  // Continuous movement effect while joystick is active with fixed speed
+  // Smooth joystick movement effect - always running to prevent freezing
   React.useEffect(() => {
-    // Only start if joystick becomes active and loop isn't already running
-    if (!isJoystickActive || movementLoopActiveRef.current) {
-      return;
-    }
-
-    movementLoopActiveRef.current = true;
-    
-    // Fixed interval for movement
-    let intervalId;
+    let animationFrameId;
     let isActive = true;
+    let lastTime = performance.now();
+    let lastStateUpdateTime = 0;
+    const STATE_UPDATE_INTERVAL = 16; // Update state at ~60fps for fluid movement
     
-    // Execute first movement immediately (no delay)
-    const executeMove = () => {
-      if (!isActive || !movementLoopActiveRef.current) return;
+    const animate = (currentTime) => {
+      if (!isActive) return;
+      
+      // Use ref to check game state (avoids stale closures)
+      if (gameStateRef.current !== 'playing') {
+        animationFrameId = requestAnimationFrame(animate);
+        return;
+      }
+      
+      // Calculate delta time for consistent speed regardless of frame rate
+      const deltaTime = currentTime - lastTime;
+      lastTime = currentTime;
       
       // Always check the current direction from ref (works even at boundary)
       const currentDir = joystickDirectionRef.current;
 
       // Keep moving as long as joystick is active
-      // Continue moving even if finger is still on joystick (not released)
-      if (isJoystickActiveRef.current && gameStateRef.current === 'playing') {
-        // Only move if there's a direction
-        if (currentDir.x !== 0 || currentDir.y !== 0) {
-          moveBall(currentDir.x, currentDir.y);
+      if (isJoystickActiveRef.current && (currentDir.x !== 0 || currentDir.y !== 0)) {
+        // Get current position from ref (always up-to-date, no re-render needed)
+        const currentPos = ballPosRef.current;
+        
+        // Calculate movement based on speed and delta time
+        // Normalize speed to be consistent (60fps = ~16.67ms per frame)
+        const normalizedSpeed = MOVE_SPEED * (deltaTime / 16.67);
+        
+        // Calculate new position
+        const newX = currentPos.x + (currentDir.x * normalizedSpeed);
+        const newY = currentPos.y + (currentDir.y * normalizedSpeed);
+        
+        // Check if we can move to the target tile
+        const targetTileX = Math.floor(newX);
+        const targetTileY = Math.floor(newY);
+        
+        if (canMoveTo(targetTileX, targetTileY)) {
+          // Also check if we're within bounds
+          if (newX >= 0 && newX < GRID_SIZE && newY >= 0 && newY < GRID_SIZE) {
+            // Always update ref immediately for calculations
+            ballPosRef.current = { x: newX, y: newY };
+            
+            // Check for tile interactions
+            checkTileInteractions(newX, newY);
+            
+            // Update state more frequently for smoother visuals
+            if (currentTime - lastStateUpdateTime >= STATE_UPDATE_INTERVAL) {
+              setBallPos({ x: newX, y: newY });
+              lastStateUpdateTime = currentTime;
+            }
+          }
         }
       }
+      
+      // Continue animation loop
+      animationFrameId = requestAnimationFrame(animate);
     };
     
-    // Execute first move immediately
-    executeMove();
-    
-    // Then start interval for continuous movement
-    intervalId = setInterval(executeMove, MOVE_INTERVAL_MS);
+    // Start animation loop immediately
+    animationFrameId = requestAnimationFrame(animate);
 
     return () => {
       isActive = false;
-      movementLoopActiveRef.current = false;
-      if (intervalId) {
-        clearInterval(intervalId);
+      if (animationFrameId) {
+        cancelAnimationFrame(animationFrameId);
       }
     };
-  }, [isJoystickActive]); // Only depend on isJoystickActive, not gameState
+  }, [checkTileInteractions]); // Only depend on checkTileInteractions
 
   const handleJoystickStart = (e) => {
     setIsJoystickActive(true);
