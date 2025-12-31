@@ -498,6 +498,7 @@ const IsometricGame = () => {
   const [isJoystickActive, setIsJoystickActive] = React.useState(false);
   const joystickDirectionRef = React.useRef({ x: 0, y: 0 });
   const isJoystickActiveRef = React.useRef(false);
+  const joystickLastPositionRef = React.useRef({ clientX: null, clientY: null });
   const gameStateRef = React.useRef('playing');
   const movementLoopActiveRef = React.useRef(false);
   
@@ -1419,7 +1420,44 @@ const IsometricGame = () => {
     return joystickRef.current.offsetWidth / 2;
   };
 
+  // Calculate direction from joystick position (reusable function)
+  const calculateJoystickDirection = (clientX, clientY) => {
+    const center = getJoystickCenter();
+    const dx = clientX - center.x;
+    const dy = clientY - center.y;
+    const angle = Math.atan2(dy, dx);
+
+    // Calculate continuous 360-degree movement direction using natural screen directions
+    const screenX = Math.cos(angle);  // -1 to 1 (left to right: -1 = left, 1 = right)
+    const screenY = Math.sin(angle);  // -1 to 1 (up to down: -1 = up, 1 = down)
+
+    // Convert to isometric coordinates using EXACT same logic as keyboard
+    // Keyboard mapping:
+    // W/Up: dx = -1, dy = -1
+    // S/Down: dx = 1, dy = 1
+    // A/Left: dx = -1, dy = 1
+    // D/Right: dx = 1, dy = -1
+    // Formula that matches keyboard (flip screenX in the formula):
+    const isoX = screenY + screenX;  // Up: -1+0=-1, Down: 1+0=1, Left: 0+(-1)=-1, Right: 0+1=1
+    const isoY = screenY - screenX;  // Up: -1-0=-1, Down: 1-0=1, Left: 0-(-1)=1, Right: 0-1=-1
+    
+    // Match keyboard behavior exactly: clamp to -1, 0, or 1 (same as keyboard)
+    // This allows diagonal movement to be faster (sqrt(2)) just like keyboard
+    return { 
+      x: Math.max(-1, Math.min(1, isoX)), 
+      y: Math.max(-1, Math.min(1, isoY)) 
+    };
+  };
+
   const updateJoystickPosition = (clientX, clientY) => {
+    // Store last position immediately for frame-by-frame recalculation
+    // Use requestAnimationFrame to ensure this happens before next frame
+    joystickLastPositionRef.current = { clientX, clientY };
+    
+    // Update direction immediately - this ensures instant response
+    const newDir = calculateJoystickDirection(clientX, clientY);
+    joystickDirectionRef.current = newDir;
+
     const center = getJoystickCenter();
     const radius = getJoystickRadius();
     const handleRadius = radius * 0.3; // Handle is 30% of boundary radius
@@ -1436,39 +1474,6 @@ const IsometricGame = () => {
     const newY = Math.sin(angle) * clampedDistance;
 
     setJoystickPos({ x: newX, y: newY });
-
-    // Calculate continuous 360-degree movement direction using natural screen directions
-    // Use actual distance to calculate direction (not clamped)
-    if (distance > maxDistance * 0.2) { // Dead zone threshold
-      // Get normalized direction vector from joystick angle (natural screen space)
-      // angle is in radians: 0 = right, π/2 = down, π = left, -π/2 = up
-      const screenX = Math.cos(angle);  // -1 to 1 (left to right: -1 = left, 1 = right)
-      const screenY = Math.sin(angle);  // -1 to 1 (up to down: -1 = up, 1 = down)
-
-      // Convert to isometric coordinates using EXACT same logic as keyboard
-      // Keyboard mapping:
-      // W/Up: dx = -1, dy = -1
-      // S/Down: dx = 1, dy = 1
-      // A/Left: dx = -1, dy = 1
-      // D/Right: dx = 1, dy = -1
-      // Formula that matches keyboard (flip screenX in the formula):
-      const isoX = screenY + screenX;  // Up: -1+0=-1, Down: 1+0=1, Left: 0+(-1)=-1, Right: 0+1=1
-      const isoY = screenY - screenX;  // Up: -1-0=-1, Down: 1-0=1, Left: 0-(-1)=1, Right: 0-1=-1
-      
-      // Normalize to maintain consistent speed in all directions
-      const isoLength = Math.sqrt(isoX * isoX + isoY * isoY);
-      if (isoLength > 0) {
-        joystickDirectionRef.current = { 
-          x: isoX / isoLength, 
-          y: isoY / isoLength 
-        };
-      } else {
-        joystickDirectionRef.current = { x: 0, y: 0 };
-      }
-    } else {
-      // Only reset direction when in dead zone
-      joystickDirectionRef.current = { x: 0, y: 0 };
-    }
   };
 
   // Smooth joystick movement effect - always running to prevent freezing
@@ -1492,10 +1497,29 @@ const IsometricGame = () => {
       const deltaTime = currentTime - lastTime;
       lastTime = currentTime;
       
-      // Always check the current direction from ref (works even at boundary)
-      const currentDir = joystickDirectionRef.current;
+      // Recalculate direction every frame from stored position for maximum responsiveness
+      // This ensures smooth direction changes even if touch events lag slightly
+      let currentDir = joystickDirectionRef.current;
+      if (isJoystickActiveRef.current && joystickLastPositionRef.current.clientX !== null) {
+        const center = getJoystickCenter();
+        const dx = joystickLastPositionRef.current.clientX - center.x;
+        const dy = joystickLastPositionRef.current.clientY - center.y;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        
+        // Only recalculate if outside tiny dead zone (3 pixels) - prevents jitter
+        // If in dead zone, keep previous direction to avoid slowdown during rapid changes
+        if (distance > 3) {
+          const recalculatedDir = calculateJoystickDirection(
+            joystickLastPositionRef.current.clientX,
+            joystickLastPositionRef.current.clientY
+          );
+          currentDir = recalculatedDir;
+          joystickDirectionRef.current = currentDir;
+        }
+        // If in dead zone, keep using previous direction (currentDir already set above)
+      }
 
-      // Keep moving as long as joystick is active
+      // Keep moving as long as joystick is active and has a direction
       if (isJoystickActiveRef.current && (currentDir.x !== 0 || currentDir.y !== 0)) {
         // Get current position from ref (always up-to-date, no re-render needed)
         const currentPos = ballPosRef.current;
@@ -1573,6 +1597,7 @@ const IsometricGame = () => {
     isJoystickActiveRef.current = false;
     setJoystickPos({ x: 0, y: 0 });
     joystickDirectionRef.current = { x: 0, y: 0 };
+    joystickLastPositionRef.current = { clientX: null, clientY: null };
   };
 
   // Add global event listeners for joystick
