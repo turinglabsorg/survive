@@ -1338,7 +1338,8 @@ const IsometricGame = () => {
     let intervalId;
     let isActive = true;
     
-    intervalId = setInterval(() => {
+    // Execute first movement immediately (no delay)
+    const executeMove = () => {
       if (!isActive || !movementLoopActiveRef.current) return;
       
       // Always check the current direction from ref (works even at boundary)
@@ -1352,7 +1353,13 @@ const IsometricGame = () => {
           moveBall(currentDir.x, currentDir.y);
         }
       }
-    }, MOVE_INTERVAL_MS);
+    };
+    
+    // Execute first move immediately
+    executeMove();
+    
+    // Then start interval for continuous movement
+    intervalId = setInterval(executeMove, MOVE_INTERVAL_MS);
 
     return () => {
       isActive = false;
